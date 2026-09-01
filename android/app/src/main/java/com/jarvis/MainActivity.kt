@@ -73,7 +73,8 @@ class MainActivity : ComponentActivity() {
                     onCommandReady = { sendCommand = it },
                     onAutomationPlan = { executeAutomationPlan(it) },
                     isAutomationEnabled = { automationController.isAccessibilityEnabled },
-                    onEnableAutomation = automationController::openAccessibilitySettings
+                    onEnableAutomation = automationController::openAccessibilitySettings,
+                    isListening = { isListeningActive }
                 )
             }
         }
@@ -166,7 +167,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private var isListeningActive = false
+    private var isListeningActive by mutableStateOf(false)
 
     private fun activateListening() {
         if (isListeningActive) return
@@ -243,7 +244,8 @@ fun JarvisApp(
     onCommandReady: ((String) -> Unit) -> Unit = {},
     onAutomationPlan: (JSONArray) -> Unit = {},
     isAutomationEnabled: () -> Boolean = { false },
-    onEnableAutomation: () -> Unit = {}
+    onEnableAutomation: () -> Unit = {},
+    isListening: () -> Boolean = { false }
 ) {
     var currentScreen by remember { mutableStateOf("home") }
     var isConnected by remember { mutableStateOf(false) }
@@ -313,7 +315,8 @@ fun JarvisApp(
                     onNavigate = { currentScreen = it },
                     onMicClick = onMicClick,
                     isConnected = isConnected,
-                    isAutomationEnabled = isAutomationEnabled()
+                    isAutomationEnabled = isAutomationEnabled(),
+                    isListening = isListening()
                 )
                 "data" -> DataScreen()
                 "map" -> MapScreen()
