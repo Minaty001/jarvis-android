@@ -1,0 +1,36 @@
+# Node.js
+node_modules/
+npm-debug.log*
+.env
+.env.local
+dist/
+build/
+
+# Android
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.aab
+*.ap_
+*.dex
+android/captures/
+android/externalNativeBuild/
+android/.cxx/
+
+# Supabase
+supabase/.temp/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDE
+.vscode/
+.idea/

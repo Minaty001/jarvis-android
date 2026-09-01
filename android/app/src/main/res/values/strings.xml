@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">JARVIS</string>
+    <string name="accessibility_service_description">JARVIS AI uses this to automate tasks on your device — tapping buttons, typing text, reading screen content, and launching apps. No data is collected or transmitted.</string>
+</resources>

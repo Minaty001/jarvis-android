@@ -1,0 +1,52 @@
+#!/usr/bin/env sh
+#
+# Jarvis Android Gradle Wrapper Script
+#
+DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Check Java availability, preferring JAVA_HOME when explicitly configured.
+if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    JAVACMD="$JAVA_HOME/bin/java"
+elif command -v java >/dev/null 2>&1; then
+    JAVACMD="java"
+else
+    echo "=================================================================================="
+    echo "[JARVIS BUILD ERROR] Java JDK 17 is not installed or not found in PATH / JAVA_HOME."
+    echo "=================================================================================="
+    echo "Required Setup Steps:"
+    echo "  1. Install OpenJDK 17:"
+    echo "     • Ubuntu/Debian: sudo apt-get update && sudo apt-get install openjdk-17-jdk -y"
+    echo "     • Fedora/RHEL:   sudo dnf install java-17-openjdk-devel -y"
+    echo "     • macOS:         brew install openjdk@17"
+    echo "     • Windows:       Install OpenJDK 17 or Eclipse Temurin 17"
+    echo "  2. Export JAVA_HOME (e.g., export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64)"
+    echo "=================================================================================="
+    exit 1
+fi
+
+# Check Android SDK
+if [ -z "$ANDROID_HOME" ] && [ -z "$ANDROID_SDK_ROOT" ]; then
+    if [ -d "$HOME/Android/Sdk" ]; then
+        export ANDROID_HOME="$HOME/Android/Sdk"
+    elif [ -d "/usr/lib/android-sdk" ]; then
+        export ANDROID_HOME="/usr/lib/android-sdk"
+    fi
+fi
+
+# Check Gradle execution method.
+# Prefer the project's wrapper jar (downloads/uses the Gradle version pinned in
+# gradle-wrapper.properties, e.g. 8.4) over any system `gradle` on PATH — a
+# system Gradle (often an old 4.x) cannot parse the Kotlin DSL build scripts.
+if [ -f "$DIR/gradle/wrapper/gradle-wrapper.jar" ]; then
+    # The wrapper JAR exposes GradleWrapperMain as a class; it is not an
+    # executable JAR and therefore must be launched through the classpath.
+    exec "$JAVACMD" -classpath "$DIR/gradle/wrapper/gradle-wrapper.jar" org.gradle.wrapper.GradleWrapperMain "$@"
+elif command -v gradle >/dev/null 2>&1; then
+    exec gradle "$@"
+else
+    echo "=================================================================================="
+    echo "[JARVIS BUILD NOTICE] Gradle wrapper jar not found and no system Gradle detected."
+    echo "  The wrapper jar should live at: $DIR/gradle/wrapper/gradle-wrapper.jar"
+    echo "=================================================================================="
+    exit 1
+fi
