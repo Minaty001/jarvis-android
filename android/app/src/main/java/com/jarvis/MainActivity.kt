@@ -184,6 +184,10 @@ class MainActivity : ComponentActivity() {
             },
             onPartialResult = { partial ->
                 // Could update UI with partial text
+            },
+            onError = { errorMsg ->
+                isListeningActive = false
+                Toast.makeText(this, errorMsg, Toast.LENGTH_SHORT).show()
             }
         )
         if (!started) {

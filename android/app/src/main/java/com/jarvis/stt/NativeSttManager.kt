@@ -36,10 +36,12 @@ class NativeSttManager(private val context: Context) {
 
     fun startListening(
         onResult: (String) -> Unit,
-        onPartialResult: (String) -> Unit = {}
+        onPartialResult: (String) -> Unit = {},
+        onError: (String) -> Unit = {}
     ): Boolean {
         if (!isAvailable) {
             Log.w(TAG, "Speech recognition unavailable")
+            onError("Speech recognition unavailable")
             return false
         }
         if (isListening) return true
@@ -69,7 +71,16 @@ class NativeSttManager(private val context: Context) {
 
                         override fun onError(error: Int) {
                             isListening = false
-                            Log.e(TAG, "SpeechRecognizer error code: $error")
+                            val message = when (error) {
+                                SpeechRecognizer.ERROR_NO_MATCH -> "No speech detected"
+                                SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech input timed out"
+                                SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Audio permission required"
+                                SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network connection error"
+                                else -> "Speech recognition error ($error)"
+                            }
+                            Log.e(TAG, "SpeechRecognizer error: $message (code $error)")
+                            onError(message)
                         }
 
                         override fun onResults(results: Bundle?) {
@@ -79,6 +90,8 @@ class NativeSttManager(private val context: Context) {
                                 val recognizedText = matches[0]
                                 Log.d(TAG, "Recognized text: $recognizedText")
                                 onResult(recognizedText)
+                            } else {
+                                onError("No speech detected")
                             }
                         }
 
@@ -104,6 +117,7 @@ class NativeSttManager(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting native SpeechRecognizer", e)
                 isListening = false
+                onError(e.message ?: "Failed to start speech recognition")
             }
         }
         return true
