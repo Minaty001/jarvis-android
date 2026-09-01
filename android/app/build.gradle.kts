@@ -16,8 +16,8 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        buildConfigField("String", "BACKEND_WS_URL", "\"wss://jarvis-backend.onrender.com/ws\"")
-        buildConfigField("String", "BACKEND_API_URL", "\"https://jarvis-backend.onrender.com\"")
+        buildConfigField("String", "BACKEND_WS_URL", "\"wss://jarvis-android.onrender.com/ws\"")
+        buildConfigField("String", "BACKEND_API_URL", "\"https://jarvis-android.onrender.com\"")
     }
 
     buildTypes {

@@ -109,7 +109,7 @@ fun SettingsScreen(
                             fontSize = 15.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = "ws://jarvis-backend.onrender.com/ws", color = TextGray, fontSize = 11.sp)
+                        Text(text = com.jarvis.config.Config.BACKEND_WS_URL, color = TextGray, fontSize = 11.sp)
                     }
                 }
             }
