@@ -1,6 +1,7 @@
 package com.jarvis.tts
 
 import android.content.Context
+import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
@@ -17,6 +18,7 @@ class TtsManager(private val context: Context) {
     }
 
     private var tts: TextToSpeech? = null
+    private val pendingQueue = mutableListOf<String>()
 
     private val _isReady = MutableStateFlow(false)
     val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
@@ -31,7 +33,8 @@ class TtsManager(private val context: Context) {
                 if (langResult == TextToSpeech.LANG_MISSING_DATA ||
                     langResult == TextToSpeech.LANG_NOT_SUPPORTED
                 ) {
-                    tts?.setLanguage(Locale.US)
+                    Log.w(TAG, "US English not supported, trying default locale")
+                    tts?.setLanguage(Locale.getDefault())
                 }
                 tts?.setSpeechRate(0.95f)
                 tts?.setPitch(1.0f)
@@ -48,31 +51,51 @@ class TtsManager(private val context: Context) {
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
                         _isSpeaking.value = false
+                        Log.e(TAG, "TTS error for utterance: $utteranceId")
+                    }
+
+                    override fun onError(utteranceId: String?, errorCode: Int) {
+                        _isSpeaking.value = false
+                        Log.e(TAG, "TTS error code $errorCode for utterance: $utteranceId")
                     }
                 })
 
                 _isReady.value = true
-                Log.d(TAG, "TTS initialized")
+                Log.d(TAG, "TTS initialized successfully")
                 onReady()
+
+                // Flush any queued speech
+                if (pendingQueue.isNotEmpty()) {
+                    pendingQueue.toList().forEach { speakInternal(it) }
+                    pendingQueue.clear()
+                }
             } else {
-                Log.e(TAG, "TTS initialization failed: $status")
+                Log.e(TAG, "TTS initialization failed with status: $status")
             }
         }
     }
 
     fun speak(text: String) {
+        if (text.isBlank()) return
         if (!_isReady.value) {
-            Log.w(TAG, "TTS not ready")
+            Log.w(TAG, "TTS not ready, queuing: $text")
+            pendingQueue.add(text)
             return
         }
+        speakInternal(text)
+    }
 
+    private fun speakInternal(text: String) {
         if (text.length > MAX_CHUNK_SIZE) {
             val chunks = splitTextIntoChunks(text, MAX_CHUNK_SIZE)
             chunks.forEachIndexed { index, chunk ->
-                tts?.speak(chunk, TextToSpeech.QUEUE_ADD, null, "chunk_$index")
+                val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+                val params = Bundle()
+                tts?.speak(chunk, queueMode, params, "chunk_${index}_${UUID.randomUUID()}")
             }
         } else {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString())
+            val params = Bundle()
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, UUID.randomUUID().toString())
         }
     }
 
@@ -83,24 +106,32 @@ class TtsManager(private val context: Context) {
 
     fun shutdown() {
         stop()
+        pendingQueue.clear()
         tts?.shutdown()
         tts = null
         _isReady.value = false
     }
 
+    /**
+     * Splits text into chunks at sentence boundaries to avoid cutting words mid-speech.
+     * Falls back to last space if no sentence boundary found within maxSize.
+     */
     private fun splitTextIntoChunks(text: String, maxSize: Int): List<String> {
         val chunks = mutableListOf<String>()
-        var remaining = text
+        var remaining = text.trim()
 
         while (remaining.length > maxSize) {
-            val breakPoint = remaining.lastIndexOf(". ", maxSize)
-                .coerceAtLeast(remaining.lastIndexOf("! ", maxSize))
-                .coerceAtLeast(remaining.lastIndexOf("? ", maxSize))
-                .coerceAtLeast(remaining.lastIndexOf(", ", maxSize))
-                .coerceAtLeast(maxSize)
+            val searchRange = remaining.substring(0, maxSize)
+            // Prefer splitting at sentence boundaries
+            val breakPoint = searchRange.lastIndexOf(". ")
+                .coerceAtLeast(searchRange.lastIndexOf("! "))
+                .coerceAtLeast(searchRange.lastIndexOf("? "))
+                .coerceAtLeast(searchRange.lastIndexOf(", "))
+                .coerceAtLeast(searchRange.lastIndexOf(" "))
+                .let { if (it <= 0) maxSize else it + 1 }
 
-            chunks.add(remaining.substring(0, breakPoint + 1).trim())
-            remaining = remaining.substring(breakPoint + 1).trim()
+            chunks.add(remaining.substring(0, breakPoint).trim())
+            remaining = remaining.substring(breakPoint).trim()
         }
 
         if (remaining.isNotBlank()) {

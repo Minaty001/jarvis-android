@@ -59,10 +59,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Voice: Wake Word Detection
-    implementation("xyz.rementia:openwakeword:0.1.5")
-
-
+    // Wake word: uses Android SpeechRecognizer loop (no external library needed)
 
     // Reminders: WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.1")
