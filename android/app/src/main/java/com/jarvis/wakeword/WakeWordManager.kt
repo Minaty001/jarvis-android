@@ -23,6 +23,7 @@ class WakeWordManager(private val context: Context) {
     companion object {
         private const val TAG = "WakeWordManager"
         private const val DETECTION_COOLDOWN_MS = 3000L
+        private const val MODEL_PATH = "jarvis.onnx"
     }
 
     private var engine: WakeWordEngine? = null
@@ -33,13 +34,17 @@ class WakeWordManager(private val context: Context) {
 
     private var isActive = false
 
-    fun start() {
-        if (isActive) return
+    fun start(): Boolean {
+        if (isActive) return true
+        if (MODEL_PATH !in (context.assets.list("") ?: emptyArray())) {
+            Log.w(TAG, "Wake-word model unavailable: $MODEL_PATH")
+            return false
+        }
 
         val models = listOf(
             WakeWordModel(
                 name = "hey_jarvis",
-                modelPath = "jarvis.onnx"
+                modelPath = MODEL_PATH
             )
         )
 
@@ -66,6 +71,7 @@ class WakeWordManager(private val context: Context) {
         engine?.start()
         isActive = true
         Log.d(TAG, "Wake word detection started")
+        return true
     }
 
     fun stop() {

@@ -62,9 +62,7 @@ dependencies {
     // Voice: Wake Word Detection
     implementation("xyz.rementia:openwakeword:0.1.5")
 
-    // Voice: Offline Speech-to-Text (Vosk)
-    implementation("com.alphacephei:vosk-android:0.3.75@aar")
-    implementation("net.java.dev.jna:jna:5.18.1@aar")
+
 
     // Reminders: WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.1")

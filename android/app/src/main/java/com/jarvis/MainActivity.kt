@@ -28,7 +28,7 @@ import com.jarvis.audio.ClapDetector
 import com.jarvis.backend.WebSocketClient
 import com.jarvis.config.Config
 import com.jarvis.memory.MemorySyncWorker
-import com.jarvis.stt.VoskManager
+import com.jarvis.stt.NativeSttManager
 import com.jarvis.tts.TtsManager
 import com.jarvis.ui.components.*
 import com.jarvis.ui.screens.*
@@ -41,7 +41,7 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     private lateinit var wakeWordManager: WakeWordManager
-    private lateinit var voskManager: VoskManager
+    private lateinit var sttManager: NativeSttManager
     private lateinit var ttsManager: TtsManager
     private lateinit var clapDetector: ClapDetector
     private var sendCommand: ((String) -> Unit)? = null
@@ -129,13 +129,13 @@ class MainActivity : ComponentActivity() {
 
     private fun initVoiceComponents() {
         wakeWordManager = WakeWordManager(this)
-        voskManager = VoskManager(this)
+        sttManager = NativeSttManager(this)
         ttsManager = TtsManager(this)
         clapDetector = ClapDetector(this)
 
         ttsManager.initialize()
 
-        voskManager.initialize(
+        sttManager.initialize(
             onReady = {
                 runOnUiThread {
                     Toast.makeText(this, "Voice system ready", Toast.LENGTH_SHORT).show()
@@ -148,12 +148,14 @@ class MainActivity : ComponentActivity() {
             }
         )
 
-        wakeWordManager.start()
+        val wakeWordStarted = wakeWordManager.start()
         clapDetector.start()
 
-        lifecycleScope.launch {
-            wakeWordManager.detections.collect {
-                runOnUiThread { activateListening() }
+        if (wakeWordStarted) {
+            lifecycleScope.launch {
+                wakeWordManager.detections.collect {
+                    runOnUiThread { activateListening() }
+                }
             }
         }
 
@@ -168,10 +170,14 @@ class MainActivity : ComponentActivity() {
 
     private fun activateListening() {
         if (isListeningActive) return
+        if (!sttManager.isAvailable) {
+            Toast.makeText(this, "Speech recognition unavailable", Toast.LENGTH_SHORT).show()
+            return
+        }
         isListeningActive = true
         Toast.makeText(this, "Listening...", Toast.LENGTH_SHORT).show()
 
-        voskManager.startListening(
+        val started = sttManager.startListening(
             onResult = { text ->
                 isListeningActive = false
                 sendCommandToBackend(text)
@@ -180,11 +186,14 @@ class MainActivity : ComponentActivity() {
                 // Could update UI with partial text
             }
         )
+        if (!started) {
+            isListeningActive = false
+        }
     }
 
     private fun toggleListening() {
         if (isListeningActive) {
-            voskManager.stopListening()
+            sttManager.stopListening()
             isListeningActive = false
         } else {
             activateListening()
@@ -216,10 +225,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        wakeWordManager.release()
-        voskManager.release()
-        ttsManager.shutdown()
-        clapDetector.stop()
+        if (::wakeWordManager.isInitialized) wakeWordManager.release()
+        if (::sttManager.isInitialized) sttManager.release()
+        if (::ttsManager.isInitialized) ttsManager.shutdown()
+        if (::clapDetector.isInitialized) clapDetector.stop()
     }
 }
 

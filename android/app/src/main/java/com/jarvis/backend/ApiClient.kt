@@ -113,7 +113,7 @@ class ApiClient {
                 MemoryStats(
                     totalMemories = json.optInt("totalMemories", 0),
                     totalSkills = json.optInt("totalSkills", 0),
-                    lastSync = json.optString("lastSync", null)
+                    lastSync = if (json.isNull("lastSync")) null else json.optString("lastSync")
                 )
             } catch (e: Exception) {
                 MemoryStats(0, 0)
