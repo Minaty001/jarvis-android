@@ -323,7 +323,8 @@ fun JarvisApp(
                 "settings" -> SettingsScreen(
                     isAutomationEnabled = isAutomationEnabled(),
                     onEnableAutomation = onEnableAutomation,
-                    isBackendConnected = isConnected
+                    isBackendConnected = isConnected,
+                    onTestTts = { speakText("JARVIS voice system operational.") }
                 )
             }
         }

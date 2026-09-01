@@ -15,6 +15,9 @@ import androidx.compose.ui.unit.sp
 import com.jarvis.ui.components.*
 import com.jarvis.ui.theme.*
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+
 @Composable
 fun HomeScreen(
     onNavigate: (String) -> Unit = {},
@@ -23,11 +26,13 @@ fun HomeScreen(
     isAutomationEnabled: Boolean = false
 ) {
     val statusText = if (isConnected) "READY TO HELP" else "CONNECTING"
+    val scrollState = rememberScrollState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(horizontal = 20.dp),
+            .verticalScroll(scrollState)
+            .padding(horizontal = 20.dp, vertical = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(modifier = Modifier.height(30.dp))
