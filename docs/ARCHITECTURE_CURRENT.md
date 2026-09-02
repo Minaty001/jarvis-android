@@ -1,123 +1,80 @@
-# Current Architecture (as of 01-auth-contract)
+# Current Architecture (after commits 01–20)
 
-## Android App
+## Package Structure
+
+### Android (com.jarvis)
+```
+assistant/          — AssistantRuntime, AssistantState, AssistantEvent
+voice/              — VoiceRuntime, VoiceState, MicOwner
+audio/              — AudioSessionManager, ClapDetector
+auth/               — AuthState, TokenStore, AuthManager
+automation/         — AutomationController, ActionPolicyEngine, ConfirmationManager,
+                      SkillExecutor, UiAwaiter, JarvisAccessibilityService
+accessibility/      — AccessibilityEngine (coroutine wrapper)
+backend/            — ApiClient, WebSocketClient, ConnectionManager, WsMessage
+memory/             — MemoryManager, CachedMemory, MemoryDao, JarvisDatabase
+privacy/            — PrivacyBoundary
+skills/             — SkillManager, CachedSkill, SkillDao
+wakeword/           — OnnxWakeWordDetector, LiveKitWakeWordEngine, OnnxLifecycleState
+tts/                — TtsManager
+stt/                — NativeSttManager
+config/             — Config
+ui/                 — MainActivity, screens, components, viewmodel/MainViewModel
+```
+
+### Backend (backend/src/)
+```
+auth/               — tokenService, sessionService, enrollmentService, websocketAuth
+actions/            — actionSchemas, actionRegistry, actionPolicy
+core/               — commandRouter, confirmationManager, llmOrchestrator, memoryManager
+middleware/         — auth, rateLimit, validate
+routes/             — auth, memory, skills, actions
+index.js            — Express + WS server
+```
+
+## Key Data Flow
 
 ```
-MainActivity (thin — observes state, permission handling)
-    ↓
-MainViewModel (bridges UI ↔ Runtime, uses AuthState)
-    ↓
-AssistantRuntime (singleton, owns everything)
-    ├── AuthManager (AuthState sealed interface, persistent tokens)
-    ├── ApiClient (register/refresh, OkHttp)
-    ├── ConnectionManager (WS lifecycle, 7 states)
-    ├── WebSocketClient (token+deviceId, auth-first connect)
-    ├── ConfirmationManager (Activity-independent, 20s timeout → DENY)
-    ├── ActionPolicyEngine (validate → permission → risk → confirm → execute)
-    ├── SkillExecutor (ActionResult sealed interface)
-    ├── AutomationController (awaiter patterns)
-    └── WakeEngine / STT / TTS
+User speech → VoiceRuntime → STT → AssistantRuntime → WS → Backend
+    → CommandRouter → LLM → ActionPlan → ActionPolicy.validate()
+    → ConfirmationManager (20s) → SkillExecutor → AutomationController
+    → JarvisAccessibilityService → Device
+    → Response → TTS → User
 ```
 
 ## Auth Flow
 
 ```
-App start
-    ↓
-MainViewModel.initialize()
-    ↓
-AssistantRuntime.bootstrapAndConnect()
-    ↓
-AuthManager.initialize()
-    ↓
-load tokens from EncryptedSharedPreferences
-    ↓
-┌─ Has tokens? ──→ Is access expired? ──→ No ──→ AUTHENTICATED
-│                          │
-│                          YES → Has refresh? ──→ Yes ──→ REFRESHING → refresh → AUTHENTICATED
-│                                        │
-│                                        NO → LOGGED_OUT
-│
-NO → LOGGED_OUT → registerDevice() → save tokens → AUTHENTICATED
-    ↓
-AssistantRuntime.connectWebSocket()
-    ↓
-WebSocketClient.connect(token, deviceId)
-    ↓
-CONNECTED (only if AuthState == AUTHENTICATED)
+App start → AuthManager.initialize() → load tokens
+    ├─ Has valid tokens → AUTHENTICATED → WS connect
+    ├─ Has expired access → REFRESHING → refresh → AUTHENTICATED
+    ├─ No tokens → registerDevice(enrollmentSecret) → save tokens
+    └─ Refresh fails → LOGGED_OUT
 ```
 
-## Auth States
-
-```kotlin
-sealed interface AuthState {
-    data object Loading : AuthState
-    data object Registering : AuthState
-    data object Authenticated : AuthState
-    data object Refreshing : AuthState
-    data object LoggedOut : AuthState
-    data class Error(val reason: String) : AuthState
-}
-```
-
-## Connection States
-
-```kotlin
-enum class ConnectionState {
-    DISCONNECTED,
-    CONNECTING,
-    AUTHENTICATING,
-    CONNECTED,
-    RECONNECTING,
-    AUTH_FAILED,
-    STOPPED
-}
-```
-
-## Backend Auth
+## Action Policy
 
 ```
-POST /api/v1/auth/token
-    Body: { device_id, device_name, device_model, os_version }
-    Response: { accessToken, refreshToken, expiresIn, deviceId, trusted }
-
-POST /api/v1/auth/refresh
-    Body: { refresh_token }
-    Response: { accessToken, refreshToken, expiresIn, deviceId, trusted }
-
-WS /ws?device=<deviceId>&token=<token>
-    Server validates via TokenService.validateToken()
-    → 4001 on failure
+ActionPlan → ActionSchema.validate (Zod discriminated union)
+    → ActionPolicy.validateAction (risk check)
+    → ConfirmationManager.requestConfirmation (20s timeout → DENY)
+    → SkillExecutor.executeAction (type dispatch)
 ```
 
-## Token Model
+## Risk Matrix
 
-- Opaque bearer tokens (NOT JWT)
-- Generated via `crypto.randomBytes(32).toString("base64url')`
-- Stored hashed in Supabase `device_sessions` table
-- Raw tokens never stored server-side
-- Access: 24h, Refresh: 30 days
+| Action        | Risk   | Confirm | Permissions     |
+|---------------|--------|---------|-----------------|
+| open_app      | LOW    | No      | —               |
+| tap/swipe/back| LOW    | No      | accessibility   |
+| type          | MEDIUM | No      | accessibility   |
+| wifi/bluetooth| MEDIUM | No      | —               |
+| send_sms      | HIGH   | Yes     | sms             |
+| make_call     | HIGH   | Yes     | phone           |
+| bank_transfer | FORBIDDEN | —   | —               |
 
-## Files
+## Testing
 
-### Auth (NEW — com.jarvis.auth)
-- `AuthState.kt` — sealed interface: Loading/Registering/Authenticated/Refreshing/LoggedOut/Error
-- `TokenStore.kt` — EncryptedSharedPreferences, 5 keys (access/refresh/deviceId/accessExpiry/refreshExpiry)
-- `AuthManager.kt` — state machine, refreshMutex, initialize/register/refresh/logout
-
-### Backend Auth (NEW — backend/src/auth/)
-- `tokenService.js` — TokenService class, Supabase-backed, createSession/validateToken/refreshTokens
-- `sessionService.js` — SessionService class, getSession/revokeAllSessions/cleanupExpiredSessions
-- `enrollmentService.js` — EnrollmentService class, enrollDevice/verifyEnrollment
-- `websocketAuth.js` — WebSocketAuth class, handleConnection + Zod validation + stale cleanup
-
-### Core
-- `AssistantRuntime.kt` — Singleton, uses com.jarvis.auth.AuthManager, bootstraps auth before WS
-- `MainViewModel.kt` — AndroidViewModel, observes AuthState (not old TokenState)
-- `MainActivity.kt` — Thin, permission handling + setContent only
-
-### Backend
-- `index.js` — imports createClient, wires TokenService/SessionService/WebSocketAuth
-- `middleware/auth.js` — createAuthMiddleware (Bearer + X-Device-ID)
-- `middleware/rateLimit.js` — createRateLimitMiddleware (IP-based)
-- `routes/auth.js` — POST /token, POST /refresh with Zod validation
+- Android: JUnit unit tests (auth, action policy, privacy)
+- Backend: Jest integration tests (action schema, policy, registry)
+- Run: `./gradlew test` (Android), `npm test` (backend)
