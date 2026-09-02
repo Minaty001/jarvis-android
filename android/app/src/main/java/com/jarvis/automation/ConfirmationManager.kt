@@ -25,7 +25,7 @@ interface ConfirmationUI {
 
 class ConfirmationManager(
     private val ui: ConfirmationUI,
-    private val timeoutMs: Long = 30_000
+    private val timeoutMs: Long = 20_000
 ) {
     companion object {
         private const val TAG = "ConfirmationManager"
