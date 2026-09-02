@@ -11,6 +11,7 @@ import { CommandRouter } from './core/commandRouter.js';
 import { MemoryManager } from './core/memoryManager.js';
 import { TokenService } from './auth/tokenService.js';
 import { SessionService } from './auth/sessionService.js';
+import { EnrollmentService } from './auth/enrollmentService.js';
 import { WebSocketAuth } from './auth/websocketAuth.js';
 import { createAuthMiddleware } from './middleware/auth.js';
 import { createRateLimitMiddleware } from './middleware/rateLimit.js';
@@ -27,6 +28,7 @@ const memoryManager = new MemoryManager();
 const supabase = CONFIG.supabaseUrl ? createClient(CONFIG.supabaseUrl, CONFIG.supabaseKey) : null;
 const tokenService = supabase ? new TokenService(supabase) : null;
 const sessionService = supabase ? new SessionService(supabase) : null;
+const enrollmentService = supabase ? new EnrollmentService(supabase) : null;
 const websocketAuth = tokenService ? new WebSocketAuth(tokenService) : null;
 
 const app = express();
@@ -42,7 +44,7 @@ app.use(createRateLimitMiddleware(100, 60000));
 const commandRouter = new CommandRouter(llm, memoryManager);
 
 if (tokenService) {
-  app.use('/api/v1/auth', createAuthRoutes(tokenService));
+  app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService));
   app.use(createAuthMiddleware(tokenService));
 }
 

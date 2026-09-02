@@ -99,6 +99,7 @@ class ApiClient(
         deviceName: String,
         deviceModel: String,
         osVersion: String,
+        enrollmentSecret: String? = null,
         onResult: (AuthTokens?) -> Unit
     ) {
         scope.launch {
@@ -108,6 +109,9 @@ class ApiClient(
                 put("device_name", deviceName)
                 put("device_model", deviceModel)
                 put("os_version", osVersion)
+                if (enrollmentSecret != null) {
+                    put("enrollment_secret", enrollmentSecret)
+                }
             }.toString()
 
             val request = Request.Builder()
