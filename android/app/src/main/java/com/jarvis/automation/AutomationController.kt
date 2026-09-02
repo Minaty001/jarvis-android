@@ -41,12 +41,14 @@ class AutomationController(val context: Context) {
     fun openApp(appName: String): Boolean = appController.launchAppByLabel(appName)
     fun tapElement(text: String): Boolean = JarvisAccessibilityService.instance?.clickByText(text) ?: false
     fun readScreen(): String = JarvisAccessibilityService.instance?.getScreenContent() ?: ""
+
     fun typeText(text: String): Boolean {
         val service = JarvisAccessibilityService.instance ?: return false
         val nodes = service.findByViewId("android:id/edit")
         if (nodes.isNotEmpty()) { val r = service.setText(nodes[0], text); nodes.forEach { it.recycle() }; return r }
         return false
     }
+
     fun goBack(): Boolean = JarvisAccessibilityService.instance?.pressBack() ?: false
     fun goHome(): Boolean = JarvisAccessibilityService.instance?.pressHome() ?: false
 
@@ -65,22 +67,53 @@ class AutomationController(val context: Context) {
 
     suspend fun getTodayEvents() = calendarManager.getTodayEvents()
     suspend fun searchCalendar(query: String) = calendarManager.searchEvents(query)
-    suspend fun getCalendarSummary() = calendarManager.formatEventsSummary(calendarManager.getUpcomingEvents(1))
+    suspend fun getCalendarSummary(): String {
+        val events = calendarManager.getUpcomingEvents(1)
+        return calendarManager.formatEventsSummary(events)
+    }
 
     fun shareText(text: String) = shareManager.shareText(text)
     fun shareTextToApp(text: String, packageName: String) = shareManager.shareTextToApp(text, packageName)
+
+    private suspend fun awaitViewId(
+        service: JarvisAccessibilityService,
+        viewId: String,
+        maxAttempts: Int = 10,
+        delayMs: Long = 300
+    ): Boolean {
+        repeat(maxAttempts) {
+            delay(delayMs)
+            if (service.findByViewId(viewId).isNotEmpty()) return true
+        }
+        return false
+    }
+
+    private suspend fun awaitText(
+        service: JarvisAccessibilityService,
+        text: String,
+        maxAttempts: Int = 10,
+        delayMs: Long = 300
+    ): Boolean {
+        repeat(maxAttempts) {
+            delay(delayMs)
+            val nodes = service.findByText(text)
+            if (nodes.isNotEmpty()) {
+                nodes.forEach { it.recycle() }
+                return true
+            }
+        }
+        return false
+    }
 
     suspend fun openYouTubeAndSearch(query: String): Boolean {
         val service = JarvisAccessibilityService.instance ?: return false
         if (!appController.launchApp("com.google.android.youtube")) return false
 
-        repeat(10) {
-            delay(300)
-            if (service.findByViewId("com.google.android.youtube:id/search_edit_text").isNotEmpty()) return@repeat
-            service.clickByText("Search")
-        }
+        if (!awaitText(service, "Search")) return false
+        service.clickByText("Search")
         delay(500)
 
+        if (!awaitViewId(service, "com.google.android.youtube:id/search_edit_text")) return false
         val nodes = service.findByViewId("com.google.android.youtube:id/search_edit_text")
         if (nodes.isNotEmpty()) {
             service.setText(nodes[0], query)
@@ -97,17 +130,15 @@ class AutomationController(val context: Context) {
         val service = JarvisAccessibilityService.instance ?: return false
         if (!appController.launchApp("com.android.chrome")) return false
 
-        repeat(10) {
+        if (!awaitViewId(service, "com.android.chrome:id/url_bar")) return false
+        val nodes = service.findByViewId("com.android.chrome:id/url_bar")
+        if (nodes.isNotEmpty()) {
+            service.setText(nodes[0], query)
+            nodes.forEach { it.recycle() }
             delay(300)
-            val nodes = service.findByViewId("com.android.chrome:id/url_bar")
-            if (nodes.isNotEmpty()) {
-                service.setText(nodes[0], query)
-                nodes.forEach { it.recycle() }
-                delay(300)
-                service.pressBack()
-                delay(500)
-                return true
-            }
+            service.pressBack()
+            delay(500)
+            return true
         }
         return false
     }
@@ -116,16 +147,16 @@ class AutomationController(val context: Context) {
         val service = JarvisAccessibilityService.instance ?: return false
         if (!appController.launchApp("com.whatsapp")) return false
 
-        repeat(10) {
-            delay(300)
-            service.clickByText("Search")
-        }
+        if (!awaitText(service, "Search")) return false
+        service.clickByText("Search")
         delay(500)
+
         service.setTextByFind("Search", contact)
         delay(1000)
         service.clickByText(contact)
         delay(500)
 
+        if (!awaitViewId(service, "com.whatsapp:id_entry")) return false
         val nodes = service.findByViewId("com.whatsapp:id_entry")
         if (nodes.isNotEmpty()) {
             service.setText(nodes[0], message)
