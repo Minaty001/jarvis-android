@@ -7,9 +7,19 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.nio.FloatBuffer
 import kotlin.math.sqrt
 import kotlin.math.min
+
+enum class OnnxLifecycleState {
+    UNLOADED,
+    LOADING,
+    READY,
+    ERROR
+}
 
 /**
  * Offline wake-word detector — Phase 4 rebuild.
@@ -111,6 +121,9 @@ class OnnxWakeWordDetector(
     private val classifyWindow = FloatArray(CLASSIFY_WINDOW_SAMPLES)
     private val last16Buffer = FloatArray(MIN_EMBEDDINGS * EMBEDDING_DIM)
 
+    private val _lifecycleState = MutableStateFlow(OnnxLifecycleState.UNLOADED)
+    val lifecycleState: StateFlow<OnnxLifecycleState> = _lifecycleState.asStateFlow()
+
     private var customThreshold: Float? = null
 
     val threshold: Float
@@ -147,18 +160,22 @@ class OnnxWakeWordDetector(
     private fun loadModels() {
         val ctx = context ?: run {
             Log.w(TAG, "No context — cannot load ONNX assets")
+            _lifecycleState.value = OnnxLifecycleState.ERROR
             return
         }
+        _lifecycleState.value = OnnxLifecycleState.LOADING
         try {
             val am: AssetManager = ctx.assets
             melSession = newSession(am, "$ASSET_DIR/$MEL_MODEL")
             embSession = newSession(am, "$ASSET_DIR/$EMB_MODEL")
             clsSession = newSession(am, "$ASSET_DIR/$CLS_MODEL")
             available = melSession != null && embSession != null && clsSession != null
+            _lifecycleState.value = if (available) OnnxLifecycleState.READY else OnnxLifecycleState.ERROR
             Log.i(TAG, "ONNX wake-word models loaded (available=$available)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load ONNX wake-word models — offline detection disabled", e)
             available = false
+            _lifecycleState.value = OnnxLifecycleState.ERROR
         }
     }
 
@@ -434,5 +451,6 @@ class OnnxWakeWordDetector(
         embSession = null
         clsSession = null
         available = false
+        _lifecycleState.value = OnnxLifecycleState.UNLOADED
     }
 }
