@@ -163,7 +163,15 @@ class AssistantRuntime(private val context: Context) {
             onAuthRejected = { handleWsAuthRejected() }
         )
         connectionManager.onConnecting()
-        wsClient!!.connect(token, deviceId)
+
+        apiClient.getWsTicket(token, deviceId) { ticketResult ->
+            if (ticketResult != null) {
+                wsClient!!.connectWithTicket(ticketResult.ticket, deviceId)
+            } else {
+                Log.w(TAG, "Failed to get WS ticket, falling back to token")
+                wsClient!!.connect(token, deviceId)
+            }
+        }
     }
 
     private fun handleWsDisconnected(code: Int) {

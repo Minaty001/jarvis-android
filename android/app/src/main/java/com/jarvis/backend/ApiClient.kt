@@ -26,6 +26,8 @@ data class AuthTokens(
 
 data class PingResult(val isSuccess: Boolean, val latencyMs: Long, val message: String)
 
+data class WsTicket(val ticket: String, val expiresAt: Long)
+
 data class SkillResult(
     val id: String,
     val name: String,
@@ -181,6 +183,41 @@ class ApiClient(
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Token refresh failed: ${e.message}")
+                launch(Dispatchers.Main) { onResult(null) }
+            }
+        }
+    }
+
+    fun getWsTicket(token: String, deviceId: String, onResult: (WsTicket?) -> Unit) {
+        scope.launch {
+            val cleanUrl = baseUrl.trim().trimEnd('/')
+            val request = Request.Builder()
+                .url("$cleanUrl/api/v1/auth/ws-ticket")
+                .post("".toRequestBody(JSON_MEDIA_TYPE))
+                .header("Authorization", "Bearer $token")
+                .header("X-Device-ID", deviceId)
+                .header("Connection", "keep-alive")
+                .header("Accept", "application/json")
+                .header("X-Request-ID", "wst-${UUID.randomUUID()}")
+                .build()
+
+            try {
+                sharedClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        val json = JSONObject(body)
+                        val wsTicket = WsTicket(
+                            ticket = json.getString("ticket"),
+                            expiresAt = json.getLong("expires_at")
+                        )
+                        launch(Dispatchers.Main) { onResult(wsTicket) }
+                    } else {
+                        Log.w(TAG, "WS ticket request failed: ${response.code}")
+                        launch(Dispatchers.Main) { onResult(null) }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "WS ticket request failed: ${e.message}")
                 launch(Dispatchers.Main) { onResult(null) }
             }
         }

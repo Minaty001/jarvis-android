@@ -6,30 +6,57 @@ const WsMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export class WebSocketAuth {
-  constructor(tokenService) {
+  constructor(tokenService, wsTicketStore) {
     this.tokenService = tokenService;
+    this.wsTicketStore = wsTicketStore;
     this.connections = new Map();
   }
 
   async handleConnection(ws, req) {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const ticket = url.searchParams.get("ticket");
     const token = url.searchParams.get("token");
     const deviceId = url.searchParams.get("device");
 
-    if (!token || !deviceId) {
-      ws.close(4001, "Missing token or device ID");
+    if (ticket) {
+      const ticketData = this.wsTicketStore.consumeTicket(ticket);
+      if (!ticketData) {
+        ws.close(4001, "Invalid or expired ticket");
+        return;
+      }
+      const wsDeviceId = ticketData.deviceId;
+      this.connections.set(ws, { deviceId: wsDeviceId, lastActivity: Date.now() });
+      console.log(`WebSocket connected (ticket): ${wsDeviceId}`);
+      this.sendConnected(ws, wsDeviceId);
+      this.attachHandlers(ws, wsDeviceId);
       return;
     }
 
-    const isValid = await this.tokenService.validateToken(deviceId, token);
-    if (!isValid) {
-      ws.close(4001, "Invalid token");
+    if (token && deviceId) {
+      const isValid = await this.tokenService.validateToken(deviceId, token);
+      if (!isValid) {
+        ws.close(4001, "Invalid token");
+        return;
+      }
+      this.connections.set(ws, { deviceId, lastActivity: Date.now() });
+      console.log(`WebSocket connected (token): ${deviceId}`);
+      this.sendConnected(ws, deviceId);
+      this.attachHandlers(ws, deviceId);
       return;
     }
 
-    this.connections.set(ws, { deviceId, lastActivity: Date.now() });
-    console.log(`WebSocket connected: ${deviceId}`);
+    ws.close(4001, "Missing ticket, token, or device ID");
+  }
 
+  sendConnected(ws, deviceId) {
+    ws.send(JSON.stringify({
+      type: "connected",
+      deviceId,
+      message: "JARVIS backend connected"
+    }));
+  }
+
+  attachHandlers(ws, deviceId) {
     ws.on("message", async (raw) => {
       const connection = this.connections.get(ws);
       if (connection) {
@@ -60,12 +87,6 @@ export class WebSocketAuth {
       this.connections.delete(ws);
       console.log(`WebSocket disconnected: ${deviceId}`);
     });
-
-    ws.send(JSON.stringify({
-      type: "connected",
-      deviceId,
-      message: "JARVIS backend connected"
-    }));
   }
 
   cleanupStaleConnections(maxIdleMs = 300000) {

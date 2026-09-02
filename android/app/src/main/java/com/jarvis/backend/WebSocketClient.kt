@@ -29,6 +29,19 @@ class WebSocketClient(
     @Volatile
     private var isConnected = false
 
+    fun connectWithTicket(ticket: String, deviceId: String) {
+        if (isConnected) return
+
+        val cleanUrl = baseUrl.trim().trimEnd('/')
+        val url = "$cleanUrl/ws?ticket=$ticket"
+
+        val request = Request.Builder()
+            .url(url)
+            .build()
+
+        webSocket = client.newWebSocket(request, createListener(deviceId))
+    }
+
     fun connect(token: String, deviceId: String) {
         if (isConnected) return
 
@@ -39,44 +52,46 @@ class WebSocketClient(
             .url(url)
             .build()
 
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.i(TAG, "WebSocket connected")
-                isConnected = true
-                onConnected?.invoke()
-            }
+        webSocket = client.newWebSocket(request, createListener(deviceId))
+    }
 
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d(TAG, "Received: $text")
-                onMessageReceived?.invoke(text)
-            }
+    private fun createListener(deviceId: String) = object : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            Log.i(TAG, "WebSocket connected")
+            isConnected = true
+            onConnected?.invoke()
+        }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "WebSocket closing: $reason ($code)")
-                webSocket.close(1000, null)
-                isConnected = false
-                if (code == CLOSE_AUTH_REJECTED) {
-                    Log.w(TAG, "Auth rejected by server (4001)")
-                    onAuthRejected?.invoke()
-                }
-                onDisconnected?.invoke(code)
-            }
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            Log.d(TAG, "Received: $text")
+            onMessageReceived?.invoke(text)
+        }
 
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "WebSocket closed: $reason ($code)")
-                isConnected = false
-                if (code == CLOSE_AUTH_REJECTED) {
-                    onAuthRejected?.invoke()
-                }
-                onDisconnected?.invoke(code)
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            Log.i(TAG, "WebSocket closing: $reason ($code)")
+            webSocket.close(1000, null)
+            isConnected = false
+            if (code == CLOSE_AUTH_REJECTED) {
+                Log.w(TAG, "Auth rejected by server (4001)")
+                onAuthRejected?.invoke()
             }
+            onDisconnected?.invoke(code)
+        }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket failure: ${t.message}")
-                isConnected = false
-                onDisconnected?.invoke(-1)
+        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+            Log.i(TAG, "WebSocket closed: $reason ($code)")
+            isConnected = false
+            if (code == CLOSE_AUTH_REJECTED) {
+                onAuthRejected?.invoke()
             }
-        })
+            onDisconnected?.invoke(code)
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            Log.e(TAG, "WebSocket failure: ${t.message}")
+            isConnected = false
+            onDisconnected?.invoke(-1)
+        }
     }
 
     fun disconnect() {

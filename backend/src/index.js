@@ -20,6 +20,7 @@ import { commandRoutes } from './routes/command.js';
 import { memoryRoutes } from './routes/memory.js';
 import { skillRoutes } from './routes/skill.js';
 import { createAuthRoutes } from './routes/auth.js';
+import { WsTicketStore } from './auth/wsTicketStore.js';
 
 const llm = new LLMOrchestrator();
 const sessionManager = new SessionManager();
@@ -29,7 +30,8 @@ const supabase = CONFIG.supabaseUrl ? createClient(CONFIG.supabaseUrl, CONFIG.su
 const tokenService = supabase ? new TokenService(supabase) : null;
 const sessionService = supabase ? new SessionService(supabase) : null;
 const enrollmentService = supabase ? new EnrollmentService(supabase) : null;
-const websocketAuth = tokenService ? new WebSocketAuth(tokenService) : null;
+const wsTicketStore = new WsTicketStore();
+const websocketAuth = tokenService ? new WebSocketAuth(tokenService, wsTicketStore) : null;
 
 const app = express();
 
@@ -44,7 +46,7 @@ app.use(createRateLimitMiddleware(100, 60000));
 const commandRouter = new CommandRouter(llm, memoryManager);
 
 if (tokenService) {
-  app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService, sessionService));
+  app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService, sessionService, wsTicketStore));
   app.use(createAuthMiddleware(tokenService));
 }
 

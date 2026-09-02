@@ -13,7 +13,7 @@ const refreshSchema = z.object({
   refresh_token: z.string().min(1)
 });
 
-export function createAuthRoutes(tokenService, enrollmentService, sessionService) {
+export function createAuthRoutes(tokenService, enrollmentService, sessionService, wsTicketStore) {
   const router = express.Router();
 
   router.post("/enroll", async (req, res) => {
@@ -100,6 +100,33 @@ export function createAuthRoutes(tokenService, enrollmentService, sessionService
     } catch (error) {
       console.error("Refresh error:", error.message);
       res.status(500).json({ error: "Refresh failed" });
+    }
+  });
+
+  router.post("/ws-ticket", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const deviceId = req.headers["x-device-id"];
+
+      if (!authHeader || !authHeader.startsWith("Bearer ") || !deviceId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const token = authHeader.slice(7);
+      const isValid = await tokenService.validateToken(deviceId, token);
+      if (!isValid) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+
+      if (!wsTicketStore) {
+        return res.status(503).json({ error: "WS ticket store not available" });
+      }
+
+      const { ticket, expiresAt } = wsTicketStore.createTicket(deviceId);
+      res.json({ ticket, expires_at: expiresAt });
+    } catch (error) {
+      console.error("WS ticket error:", error.message);
+      res.status(500).json({ error: "Failed to create WS ticket" });
     }
   });
 
