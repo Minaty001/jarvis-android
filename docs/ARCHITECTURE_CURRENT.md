@@ -1,82 +1,100 @@
-# Current Architecture (as of commit 89087bf)
+# Current Architecture (as of commit 7f802f5)
 
 ## Android App
 
 ```
-MainActivity (god object)
- ├── Voice (ONNX wake word + STT + TTS)
- ├── WebSocket (OkHttp)
- ├── Automation (AccessibilityService + controllers)
- ├── Confirmation (Compose dialog)
- ├── Memory (Room DB + WorkManager sync)
- └── UI (Compose screens)
+MainActivity (thin — observes state)
+    ↓
+MainViewModel (bridges UI ↔ Runtime)
+    ↓
+AssistantRuntime (singleton, owns everything)
+    ├── AuthManager (TokenState machine)
+    ├── ApiClient (ApiResult<T>, OkHttp Authenticator)
+    ├── VoiceRuntime (VoiceState machine + MicOwner)
+    ├── ConfirmationManager (Activity-independent, 30s timeout)
+    ├── ActionPolicyEngine (validate → permission → risk → confirm → execute)
+    ├── SkillExecutor (ActionResult sealed interface)
+    ├── AutomationController (awaiter patterns)
+    ├── ConnectionManager (WS lifecycle)
+    └── WebSocketClient (requires AUTHENTICATED)
 ```
 
-### Problems
-- MainActivity owns all lifecycle (433 lines)
-- Voice state tracked via `wakeWordEnabled: Boolean` + `voiceMode: VoiceInputMode`
-- ONNX models loaded in OnnxWakeWordDetector constructor (async via coroutine)
-- ClapDetector removed from init but not fully architected out
-- WebSocket created inside Composable `remember {}` block
-- Auth state not driving connection lifecycle
-- AutomationController eagerly constructs all subsystems
-- Thread.sleep replaced with retry loops but no proper awaiter pattern
-- Boolean results everywhere (no ActionResult type)
-
-### Files
-- `MainActivity.kt` — 433 lines, contains Activity + Composables
-- `AuthTokenManager.kt` — Opaque token with stored expiry timestamp
-- `WebSocketClient.kt` — OkHttp WebSocket with reconnect
-- `ApiClient.kt` — REST client with manual auth headers
-- `AutomationController.kt` — All automation methods
-- `SkillExecutor.kt` — Action execution with ConfirmationGate
-- `ActionValidator.kt` — Risk classification + param validation
-- `OnnxWakeWordDetector.kt` — 3-model ONNX pipeline
-- `LiveKitWakeWordEngine.kt` — AudioRecord capture thread
-
-## Backend
-
-```
-Node.js/Express
- ├── Auth (in-memory deviceTokens Map)
- ├── LLM (Groq → OpenRouter → NVIDIA NIM)
- ├── Memory (Supabase pgvector / keyword fallback)
- ├── Skills (3-tier matching)
- └── WebSocket (token verified on connect)
-```
-
-### Problems
-- Tokens stored in process memory (lost on restart)
-- No persistent device/session storage
-- Auth middleware O(n) scan
-- WS messages Zod-validated but REST auth is manual
-- LLM output validated with strict schema (good)
-- No ownership enforcement at DB level (no RLS)
-
-## Current Auth Flow
+## Auth Flow
 
 ```
 App start
     ↓
-Config.getDeviceId() → UUID
+AssistantRuntime.getInstance()
     ↓
-AuthTokenManager → null (fresh install)
+AuthManager → loadInitialState() from EncryptedSharedPreferences
     ↓
-NO REGISTRATION HAPPENS
+┌─ Has token? ──── YES ──→ Is expired? ──── NO ──→ AUTHENTICATED
+│                         │
+│                         YES → Has refresh? ──── YES ──→ REFRESHING → refresh → AUTHENTICATED
+│                                        │
+│                                        NO → UNAUTHENTICATED
+│
+NO → REGISTERING → register → save tokens → AUTHENTICATED
     ↓
-WebSocket connects (no token)
-    ↓
-Backend rejects (4001)
+WebSocket connects (only after AUTHENTICATED)
 ```
 
-## Current Action Pipeline
+## Voice Pipeline
 
 ```
-LLM → strict schema (18 types) → Android ActionValidator → SkillExecutor → execute
+VoiceState.OFF
+    ↓ (user enables)
+VoiceState.READY
+    ↓ (startWakeListening)
+VoiceState.WAKE_LISTENING (MicOwner.WAKE)
+    ↓ (wake word detected)
+VoiceState.COMMAND_LISTENING (MicOwner.COMMAND)
+    ↓ (STT result)
+VoiceState.PROCESSING
+    ↓ (action executed)
+VoiceState.SPEAKING (MicOwner.TTS)
+    ↓ (TTS complete)
+VoiceState.WAKE_LISTENING (if wake enabled)
 ```
 
-## Current Voice Pipeline
+## Action Pipeline
 
 ```
-ONNX wake → pause wake → STT → send command → resume wake
+LLM → strict schema (18 types) → ActionPlan
+    ↓
+ActionPolicyEngine.evaluatePlan()
+    ├─ validate(): ActionValidator (TypeAction enum + required params)
+    ├─ checkPermissions(): ACCESSIBILITY, SMS, etc.
+    └─ checkConfirmation(): HIGH risk → ConfirmationManager
+    ↓
+SkillExecutor.execute()
+    └─ returns ActionResult (Success/Failed/ScreenContent/etc.)
 ```
+
+## Files
+
+### Core
+- `AssistantRuntime.kt` — Singleton, owns all runtimes
+- `MainViewModel.kt` — AndroidViewModel, observes AssistantRuntime
+- `MainActivity.kt` — Thin, only permission handling + setContent
+
+### Auth
+- `AuthManager.kt` — TokenState enum, opaque bearer tokens, EncryptedSharedPreferences
+- `ApiClient.kt` — ApiResult<T>, OkHttp Authenticator for auto-refresh, bootstrap()
+
+### Voice
+- `VoiceRuntime.kt` — VoiceState machine, MicOwner, single mic owner rule
+- `OnnxWakeWordDetector.kt` — 3-model ONNX pipeline
+- `LiveKitWakeWordEngine.kt` — AudioRecord capture thread
+
+### Automation
+- `ActionValidator.kt` — ActionType enum, 18 allowed types, required params
+- `ActionPolicyEngine.kt` — validate → permission → confirm → execute pipeline
+- `ConfirmationManager.kt` — Activity-independent, with timeout
+- `SkillExecutor.kt` — ActionResult sealed interface
+- `AutomationController.kt` — awaiter patterns for view detection
+
+### Backend
+- `deviceSessionManager.js` — Supabase persistent sessions, token hashing
+- `index.js` — DeviceSessionManager, auth middleware, WS Zod validation
+- `commandRouter.js` — Strict 18-type action schema
