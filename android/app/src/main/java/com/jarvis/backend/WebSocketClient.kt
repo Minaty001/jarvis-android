@@ -9,8 +9,7 @@ import java.util.concurrent.TimeUnit
 class WebSocketClient(
     var wsUrl: String,
     val connectionManager: ConnectionManager = ConnectionManager(),
-    var sessionId: String? = null,
-    private val authTokenManager: AuthTokenManager? = null,
+    private val authManager: AuthManager,
     private val onMessageReceived: ((String) -> Unit)? = null,
     private val onConnected: (() -> Unit)? = null,
     private val onDisconnected: (() -> Unit)? = null
@@ -33,52 +32,22 @@ class WebSocketClient(
     private var reconnectAttempts = 0
     @Volatile private var disconnectRequested = false
 
-    fun updateUrl(newWsUrl: String) {
-        val changed = wsUrl != newWsUrl.trim()
-        wsUrl = newWsUrl.trim()
-        if (changed && webSocket != null) {
-            disconnect()
-            connect()
-        }
-    }
-
-    fun reconnect() {
-        disconnect()
-        connect()
-    }
-
-    private fun scheduleReconnect() {
-        if (disconnectRequested) return
-        if (reconnectJob?.isActive == true) return
-        reconnectJob = scope.launch {
-            connectionManager.setConnectionState(ConnectionState.RECONNECTING)
-            reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(5)
-            val delayMs = (1000L * (1L shl reconnectAttempts)).coerceIn(1500L, 8000L)
-            delay(delayMs)
-            connect()
-        }
-    }
-
     fun connect() {
+        if (!authManager.isAuthenticated) {
+            Log.w(TAG, "Cannot connect: not authenticated (state=${authManager.currentState})")
+            return
+        }
+
+        val token = authManager.accessToken ?: return
+        val deviceId = authManager.deviceId ?: return
+
         disconnectRequested = false
         reconnectJob?.cancel()
 
-        val baseUrl = sessionId?.let { sid ->
-            if (wsUrl.contains("session_id=")) wsUrl
-            else if (wsUrl.contains("?")) "$wsUrl&session_id=$sid"
-            else "$wsUrl?session_id=$sid"
-        } ?: wsUrl
+        val separator = if (wsUrl.contains("?")) "&" else "?"
+        val targetUrl = "$wsUrl${separator}device=$deviceId&token=$token"
 
-        val targetUrl = authTokenManager?.accessToken?.let { token ->
-            if (!authTokenManager.isTokenExpired(token)) {
-                val separator = if (baseUrl.contains("?")) "&" else "?"
-                "$baseUrl${separator}token=$token"
-            } else {
-                baseUrl
-            }
-        } ?: baseUrl
-
-        Log.i(TAG, "Connecting to ${targetUrl.substringBefore("?")}...")
+        Log.i(TAG, "Connecting to ${wsUrl.substringBefore("?")}...")
         connectionManager.setConnectionState(ConnectionState.CONNECTING)
         val request = Request.Builder().url(targetUrl).build()
 
@@ -111,11 +80,28 @@ class WebSocketClient(
         })
     }
 
-    fun sendCommand(command: String, userId: String = "") {
+    private fun scheduleReconnect() {
+        if (disconnectRequested) return
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = scope.launch {
+            connectionManager.setConnectionState(ConnectionState.RECONNECTING)
+            reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(5)
+            val delayMs = (1000L * (1L shl reconnectAttempts)).coerceIn(1500L, 8000L)
+            delay(delayMs)
+
+            if (!authManager.isAuthenticated) {
+                Log.w(TAG, "Reconnect abort: not authenticated")
+                connectionManager.setConnectionState(ConnectionState.DISCONNECTED)
+                return@launch
+            }
+            connect()
+        }
+    }
+
+    fun sendCommand(command: String) {
         val msg = JSONObject().apply {
             put("type", "command")
             put("command", command)
-            if (userId.isNotBlank()) put("userId", userId)
         }
         val sent = webSocket?.send(msg.toString()) ?: false
         if (!sent) Log.w(TAG, "Failed to send command (socket disconnected)")

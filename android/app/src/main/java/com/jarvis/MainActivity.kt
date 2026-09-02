@@ -22,8 +22,9 @@ import androidx.work.*
 import com.jarvis.automation.*
 import com.jarvis.audio.ClapDetector
 import com.jarvis.backend.ApiClient
-import com.jarvis.backend.AuthTokenManager
+import com.jarvis.backend.AuthManager
 import com.jarvis.backend.ConnectionManager
+import com.jarvis.backend.TokenState
 import com.jarvis.backend.WebSocketClient
 import com.jarvis.config.Config
 import com.jarvis.memory.MemorySyncWorker
@@ -52,28 +53,31 @@ class MainActivity : ComponentActivity() {
     private var wakeEngine: LiveKitWakeWordEngine? = null
     private var sttManager: NativeSttManager? = null
     private var ttsManager: TtsManager? = null
-    private var authTokenManager: AuthTokenManager? = null
+    private lateinit var authManager: AuthManager
+    private lateinit var apiClient: ApiClient
     private var sendCommand: ((String) -> Unit)? = null
     private var wakeWordEnabled = false
     private var voiceMode = VoiceInputMode.OFF
 
     private val automationController by lazy { AutomationController(this) }
 
-    private var confirmationRequest by mutableStateOf<ConfirmationRequest?>(null)
-
-    private val confirmationGate = object : ConfirmationGate {
-        override suspend fun requestConfirmation(
-            actionType: String,
-            riskLevel: RiskLevel,
-            params: Map<String, String>
-        ): Boolean = suspendCancellableCoroutine { cont ->
-            runOnUiThread {
-                confirmationRequest = ConfirmationRequest(actionType, riskLevel, params, cont)
+    private val confirmationManager by lazy {
+        ConfirmationManager(
+            ui = object : ConfirmationUI {
+                override suspend fun showConfirmation(request: ConfirmationRequest): ConfirmationResult {
+                    return suspendCancellableCoroutine { cont ->
+                        runOnUiThread {
+                            confirmationRequest = ConfirmationRequestWithResult(request, cont)
+                        }
+                    }
+                }
             }
-        }
+        )
     }
 
-    private val skillExecutor by lazy { SkillExecutor(automationController, confirmationGate) }
+    private val skillExecutor by lazy { SkillExecutor(automationController, confirmationManager) }
+
+    private var confirmationRequest by mutableStateOf<ConfirmationRequestWithResult?>(null)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -89,30 +93,44 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        authTokenManager = AuthTokenManager(this)
+        authManager = AuthManager(this)
+        apiClient = ApiClient(authManager = authManager)
+
         requestAudioPermission()
         scheduleMemorySync()
+
+        lifecycleScope.launch {
+            val success = apiClient.bootstrap()
+            if (success) {
+                Log.i(TAG, "Auth bootstrap succeeded (state=${authManager.currentState})")
+            } else {
+                Log.e(TAG, "Auth bootstrap failed (state=${authManager.currentState})")
+            }
+        }
 
         setContent {
             JarvisTheme {
                 val request = confirmationRequest
                 if (request != null) {
                     ConfirmationDialog(
-                        actionType = request.actionType,
-                        riskLevel = request.riskLevel,
-                        params = request.params,
+                        actionType = request.request.actionType,
+                        riskLevel = request.request.riskLevel,
+                        params = request.request.params,
                         onConfirm = {
                             confirmationRequest = null
-                            request.continuation.resume(true)
+                            request.continuation.resume(ConfirmationResult.ALLOWED)
                         },
                         onDeny = {
                             confirmationRequest = null
-                            request.continuation.resume(false)
+                            request.continuation.resume(ConfirmationResult.DENIED)
                         }
                     )
                 }
 
+                val authState by authManager.state.collectAsState()
+
                 JarvisApp(
+                    authState = authState,
                     onMicClick = { toggleListening() },
                     speakText = { speakText(it) },
                     onCommandReady = { sendCommand = it },
@@ -122,7 +140,8 @@ class MainActivity : ComponentActivity() {
                     isListening = { isListeningActive },
                     onToggleWakeWord = { toggleWakeWord() },
                     isWakeWordEnabled = { wakeWordEnabled },
-                    authTokenManager = authTokenManager
+                    authManager = authManager,
+                    apiClient = apiClient
                 )
             }
         }
@@ -276,17 +295,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        confirmationManager.destroy()
         wakeEngine?.release()
         sttManager?.release()
         ttsManager?.shutdown()
     }
 }
 
-data class ConfirmationRequest(
-    val actionType: String,
-    val riskLevel: RiskLevel,
-    val params: Map<String, String>,
-    val continuation: kotlinx.coroutines.CancellableContinuation<Boolean>
+data class ConfirmationRequestWithResult(
+    val request: com.jarvis.automation.ConfirmationRequest,
+    val continuation: kotlinx.coroutines.CancellableContinuation<ConfirmationResult>
 )
 
 @Composable
@@ -327,6 +345,7 @@ fun ConfirmationDialog(
 
 @Composable
 fun JarvisApp(
+    authState: TokenState = TokenState.NO_TOKEN,
     onMicClick: () -> Unit = {},
     speakText: (String) -> Unit = {},
     onCommandReady: ((String) -> Unit) -> Unit = {},
@@ -336,29 +355,20 @@ fun JarvisApp(
     isListening: () -> Boolean = { false },
     onToggleWakeWord: () -> Unit = {},
     isWakeWordEnabled: () -> Boolean = { false },
-    authTokenManager: AuthTokenManager? = null
+    authManager: AuthManager,
+    apiClient: ApiClient
 ) {
     var currentScreen by remember { mutableStateOf("home") }
     var isConnected by remember { mutableStateOf(false) }
-    var isAuthReady by remember { mutableStateOf(authTokenManager?.isAuthenticated == true) }
     var chatMessages by remember { mutableStateOf(listOf<Pair<String, Boolean>>()) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(authTokenManager) {
-        if (authTokenManager?.isAuthenticated != true) {
-            val apiClient = ApiClient(authTokenManager = authTokenManager)
-            val deviceId = com.jarvis.config.Config.getDeviceId(
-               @Suppress("StaticFieldLeak") object : android.content.ContextWrapper(null) {
-                    override fun getSystemService(name: String): Any? = null
-                }
-            )
-        }
-    }
+    val isAuthReady = authState == TokenState.AUTHENTICATED
 
     val wsClient = remember(isAuthReady) {
         WebSocketClient(
             wsUrl = Config.BACKEND_WS_URL,
-            authTokenManager = authTokenManager,
+            authManager = authManager,
             onMessageReceived = { msg ->
                 try {
                     val data = JSONObject(msg).optJSONObject("data")
@@ -386,6 +396,8 @@ fun JarvisApp(
     LaunchedEffect(isAuthReady) {
         if (isAuthReady) {
             wsClient.connect()
+        } else {
+            wsClient.disconnect()
         }
     }
 

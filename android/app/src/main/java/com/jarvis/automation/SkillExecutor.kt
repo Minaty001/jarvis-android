@@ -1,24 +1,21 @@
 package com.jarvis.automation
 
 import android.util.Log
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
+import org.json.JSONObject
 
-interface ConfirmationGate {
-    suspend fun requestConfirmation(actionType: String, riskLevel: RiskLevel, params: Map<String, String>): Boolean
+sealed interface ActionResult {
+    data object Success : ActionResult
+    data class Failed(val reason: String) : ActionResult
+    data class ScreenContent(val content: String) : ActionResult
+    data class BatteryInfo(val summary: String) : ActionResult
+    data class CalendarInfo(val summary: String) : ActionResult
+    data class NeedsPermission(val permission: String) : ActionResult
+    data class Unsupported(val reason: String) : ActionResult
 }
-
-data class ActionResult(
-    val success: Boolean,
-    val screenContent: String? = null,
-    val batterySummary: String? = null,
-    val calendarSummary: String? = null,
-    val reason: String? = null
-)
 
 class SkillExecutor(
     private val automationController: AutomationController,
-    private val confirmationGate: ConfirmationGate? = null
+    private val confirmationManager: ConfirmationManager? = null
 ) {
     companion object {
         private const val TAG = "SkillExecutor"
@@ -31,7 +28,7 @@ class SkillExecutor(
         for (i in 0 until actionsJson.length()) {
             val action = actionsJson.getJSONObject(i)
             val type = action.getString("type")
-            val params = action.optJSONObject("params") ?: org.json.JSONObject()
+            val params = action.optJSONObject("params") ?: JSONObject()
 
             val validation = ActionValidator.validate(action)
             if (!validation.isValid) {
@@ -45,107 +42,107 @@ class SkillExecutor(
                 for (key in params.keys()) {
                     paramMap[key] = params.optString(key, "")
                 }
-                val confirmed = confirmationGate?.requestConfirmation(type, riskLevel, paramMap) ?: false
-                if (!confirmed) {
-                    Log.i(TAG, "Action confirmation denied: $type")
+                val result = confirmationManager?.requestConfirmation(type, riskLevel, paramMap)
+                if (result != ConfirmationResult.ALLOWED) {
+                    Log.i(TAG, "Action confirmation $result: $type")
                     return false
                 }
             }
 
             val result = executeAction(type, params)
-            if (!result.success) {
-                Log.e(TAG, "Action failed: $type (reason: ${result.reason})")
-                return false
+            when (result) {
+                is ActionResult.Success -> { /* continue */ }
+                is ActionResult.ScreenContent -> { lastScreenContent = result.content }
+                is ActionResult.BatteryInfo -> { Log.d(TAG, result.summary) }
+                is ActionResult.CalendarInfo -> { Log.d(TAG, result.summary) }
+                is ActionResult.Failed -> {
+                    Log.e(TAG, "Action failed: $type (reason: ${result.reason})")
+                    return false
+                }
+                is ActionResult.NeedsPermission -> {
+                    Log.w(TAG, "Action needs permission: ${result.permission}")
+                    return false
+                }
+                is ActionResult.Unsupported -> {
+                    Log.w(TAG, "Action unsupported: ${result.reason}")
+                    return false
+                }
             }
-
-            lastScreenContent = result.screenContent
 
             kotlinx.coroutines.delay(300)
         }
         return true
     }
 
-    private suspend fun executeAction(type: String, params: org.json.JSONObject): ActionResult {
+    private suspend fun executeAction(type: String, params: JSONObject): ActionResult {
         return when (type) {
             "open_app" -> {
                 val pkg = params.optString("package", "")
-                if (pkg.isNotBlank()) {
-                    val launched = automationController.appController.launchApp(pkg)
-                    ActionResult(launched, reason = if (!launched) "App not found: $pkg" else null)
-                } else {
-                    ActionResult(false, reason = "Missing package parameter")
-                }
+                if (pkg.isBlank()) return ActionResult.Failed("Missing package")
+                val launched = automationController.appController.launchApp(pkg)
+                if (launched) ActionResult.Success else ActionResult.Failed("App not found: $pkg")
             }
             "tap" -> {
                 val text = params.optString("text", "")
-                ActionResult(automationController.tapElement(text), reason = if (text.isBlank()) "Missing text parameter" else null)
+                if (text.isBlank()) return ActionResult.Failed("Missing text")
+                if (automationController.tapElement(text)) ActionResult.Success else ActionResult.Failed("Tap failed: $text")
             }
             "type" -> {
                 val text = params.optString("text", "")
-                ActionResult(automationController.typeText(text), reason = if (text.isBlank()) "Missing text parameter" else null)
+                if (text.isBlank()) return ActionResult.Failed("Missing text")
+                if (automationController.typeText(text)) ActionResult.Success else ActionResult.Failed("Type failed")
             }
             "swipe" -> {
                 val service = JarvisAccessibilityService.instance
-                if (service == null) {
-                    ActionResult(false, reason = "Accessibility service not enabled")
-                } else {
-                    val dir = params.optString("direction", "up")
-                    val ok = when (dir) {
-                        "up" -> service.swipeUp()
-                        "down" -> service.swipeDown()
-                        "left" -> service.swipeLeft()
-                        "right" -> service.swipeRight()
-                        else -> false
-                    }
-                    ActionResult(ok, reason = if (!ok) "Swipe failed" else null)
+                    ?: return ActionResult.NeedsPermission("Accessibility")
+                val dir = params.optString("direction", "up")
+                val ok = when (dir) {
+                    "up" -> service.swipeUp()
+                    "down" -> service.swipeDown()
+                    "left" -> service.swipeLeft()
+                    "right" -> service.swipeRight()
+                    else -> false
                 }
+                if (ok) ActionResult.Success else ActionResult.Failed("Swipe $dir failed")
             }
             "wait" -> {
                 val ms = params.optLong("durationMs", 1000).coerceIn(0, 30000)
                 kotlinx.coroutines.delay(ms)
-                ActionResult(true)
+                ActionResult.Success
             }
-            "go_back" -> ActionResult(automationController.goBack())
-            "go_home" -> ActionResult(automationController.goHome())
+            "go_back" -> if (automationController.goBack()) ActionResult.Success else ActionResult.Failed("goBack failed")
+            "go_home" -> if (automationController.goHome()) ActionResult.Success else ActionResult.Failed("goHome failed")
             "read_screen" -> {
                 val content = automationController.readScreen()
-                ActionResult(content.isNotBlank(), screenContent = content, reason = if (content.isBlank()) "No screen content" else null)
+                if (content.isNotBlank()) ActionResult.ScreenContent(content) else ActionResult.Failed("No screen content")
             }
             "send_sms" -> {
                 val phone = params.optString("phone", "")
                 val message = params.optString("message", "")
-                if (phone.isNotBlank() && message.isNotBlank()) {
-                    val sent = automationController.sendSms(phone, message)
-                    ActionResult(sent.success, reason = if (!sent.success) "SMS failed" else null)
-                } else {
-                    ActionResult(false, reason = "Missing phone or message")
-                }
+                if (phone.isBlank() || message.isBlank()) return ActionResult.Failed("Missing phone or message")
+                val sent = automationController.sendSms(phone, message)
+                if (sent.success) ActionResult.Success else ActionResult.Failed("SMS failed")
             }
-            "bluetooth_on" -> ActionResult(automationController.toggleBluetooth(true))
-            "bluetooth_off" -> ActionResult(automationController.toggleBluetooth(false))
-            "bluetooth_toggle" -> ActionResult(automationController.toggleBluetoothAuto())
-            "wifi_on" -> ActionResult(automationController.toggleWifi(true))
-            "wifi_off" -> ActionResult(automationController.toggleWifi(false))
-            "wifi_toggle" -> ActionResult(automationController.toggleWifiAuto())
-            "battery_status" -> {
-                val summary = automationController.getBatterySummary()
-                ActionResult(true, batterySummary = summary)
-            }
-            "calendar_today" -> {
-                val summary = automationController.getCalendarSummary()
-                ActionResult(true, calendarSummary = summary)
-            }
+            "bluetooth_on" -> if (automationController.toggleBluetooth(true)) ActionResult.Success else ActionResult.Failed("BT on failed")
+            "bluetooth_off" -> if (automationController.toggleBluetooth(false)) ActionResult.Success else ActionResult.Failed("BT off failed")
+            "bluetooth_toggle" -> if (automationController.toggleBluetoothAuto()) ActionResult.Success else ActionResult.Failed("BT toggle failed")
+            "wifi_on" -> if (automationController.toggleWifi(true)) ActionResult.Success else ActionResult.Failed("WiFi on failed")
+            "wifi_off" -> if (automationController.toggleWifi(false)) ActionResult.Success else ActionResult.Failed("WiFi off failed")
+            "wifi_toggle" -> if (automationController.toggleWifiAuto()) ActionResult.Success else ActionResult.Failed("WiFi toggle failed")
+            "battery_status" -> ActionResult.BatteryInfo(automationController.getBatterySummary())
+            "calendar_today" -> ActionResult.CalendarInfo(automationController.getCalendarSummary())
             "calendar_search" -> {
                 val query = params.optString("query", "")
+                if (query.isBlank()) return ActionResult.Failed("Missing query")
                 val events = automationController.searchCalendar(query)
-                val summary = events.joinToString { it.title }
-                ActionResult(true, calendarSummary = summary)
+                ActionResult.CalendarInfo(events.joinToString { it.title })
             }
             "share_text" -> {
                 val text = params.optString("text", "")
-                ActionResult(automationController.shareText(text), reason = if (text.isBlank()) "Missing text" else null)
+                if (text.isBlank()) return ActionResult.Failed("Missing text")
+                if (automationController.shareText(text)) ActionResult.Success else ActionResult.Failed("Share failed")
             }
-            else -> ActionResult(false, reason = "Unknown action type: $type")
+            else -> ActionResult.Unsupported("Unknown action: $type")
         }
     }
 }

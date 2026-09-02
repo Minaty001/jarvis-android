@@ -2,23 +2,23 @@ import express from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import crypto from 'node:crypto';
 import { z } from 'zod';
 import { CONFIG } from './config.js';
 import { LLMOrchestrator } from './core/llmOrchestrator.js';
 import { SessionManager } from './core/sessionManager.js';
 import { CommandRouter } from './core/commandRouter.js';
 import { MemoryManager } from './core/memoryManager.js';
+import { DeviceSessionManager } from './core/deviceSessionManager.js';
 import { healthRoutes } from './routes/health.js';
 import { commandRoutes } from './routes/command.js';
 import { memoryRoutes } from './routes/memory.js';
 import { skillRoutes } from './routes/skill.js';
 import { sanitizeMiddleware } from './middleware/sanitize.js';
-import { authMiddleware } from './middleware/auth.js';
 
 const llm = new LLMOrchestrator();
 const sessionManager = new SessionManager();
 const memoryManager = new MemoryManager();
+const deviceSessions = new DeviceSessionManager();
 const commandRouter = new CommandRouter(llm, memoryManager);
 
 const app = express();
@@ -31,8 +31,8 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(sanitizeMiddleware);
 app.set('sessionManager', sessionManager);
+app.set('deviceSessions', deviceSessions);
 
-const deviceTokens = new Map();
 const requestCounts = new Map();
 const RATE_LIMIT_WINDOW = 60000;
 const RATE_LIMIT_MAX = 30;
@@ -51,7 +51,7 @@ app.use((req, res, next) => {
   requestCounts.set(ip, record);
 
   if (record.count > RATE_LIMIT_MAX) {
-    return res.status(429).json({ status: 'error', message: 'Rate limit exceeded. Try again later.' });
+    return res.status(429).json({ status: 'error', message: 'Rate limit exceeded.' });
   }
 
   res.setHeader('X-RateLimit-Remaining', Math.max(0, RATE_LIMIT_MAX - record.count));
@@ -69,64 +69,68 @@ app.use((req, res, next) => {
   next();
 });
 
-function generateToken() {
-  return crypto.randomBytes(32).toString('base64url');
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ status: 'error', message: 'Missing Authorization header' });
+  }
+
+  const token = authHeader.slice(7);
+  const deviceId = req.headers['x-device-id'];
+
+  if (!deviceId) {
+    return res.status(401).json({ status: 'error', message: 'Missing X-Device-ID header' });
+  }
+
+  const valid = await deviceSessions.validateToken(deviceId, token);
+  if (!valid) {
+    return res.status(401).json({ status: 'error', message: 'Invalid or expired token' });
+  }
+
+  req.authenticatedDeviceId = deviceId;
+  next();
 }
 
-app.post('/api/v1/auth/token', (req, res) => {
-  const { device_id, device_name, device_model, os_version } = req.body;
-  if (!device_id) {
-    return res.status(400).json({ error: 'device_id is required' });
-  }
-  const token = generateToken();
-  const refreshToken = generateToken();
-  const expiresIn = 86400;
-  deviceTokens.set(device_id, { token, refreshToken, device_name, device_model, os_version, createdAt: Date.now() });
-  res.json({
-    access_token: token,
-    refresh_token: refreshToken,
-    expires_in: expiresIn,
-    device_id,
-    trusted: false,
-  });
-});
-
-app.post('/api/v1/auth/refresh', (req, res) => {
-  const { refresh_token } = req.body;
-  if (!refresh_token) {
-    return res.status(400).json({ error: 'refresh_token is required' });
-  }
-  let foundDeviceId = null;
-  for (const [deviceId, data] of deviceTokens.entries()) {
-    if (data.refreshToken === refresh_token) {
-      foundDeviceId = deviceId;
-      break;
+app.post('/api/v1/auth/token', async (req, res) => {
+  try {
+    const { device_id, device_name, device_model, os_version } = req.body;
+    if (!device_id) {
+      return res.status(400).json({ error: 'device_id is required' });
     }
+    const tokens = await deviceSessions.registerDevice({
+      deviceId: device_id,
+      deviceName: device_name,
+      deviceModel: device_model,
+      osVersion: os_version,
+    });
+    res.json(tokens);
+  } catch (err) {
+    console.error('Registration error:', err.message);
+    res.status(500).json({ error: 'Registration failed' });
   }
-  if (!foundDeviceId) {
-    return res.status(401).json({ error: 'Invalid refresh token' });
-  }
-  const newToken = generateToken();
-  const newRefresh = generateToken();
-  const entry = deviceTokens.get(foundDeviceId);
-  entry.token = newToken;
-  entry.refreshToken = newRefresh;
-  deviceTokens.set(foundDeviceId, entry);
-  res.json({
-    access_token: newToken,
-    refresh_token: newRefresh,
-    expires_in: 86400,
-    device_id: foundDeviceId,
-    trusted: false,
-  });
 });
 
-const protectedAuth = authMiddleware(deviceTokens);
+app.post('/api/v1/auth/refresh', async (req, res) => {
+  try {
+    const { refresh_token } = req.body;
+    if (!refresh_token) {
+      return res.status(400).json({ error: 'refresh_token is required' });
+    }
+    const tokens = await deviceSessions.refreshTokens(refresh_token);
+    if (!tokens) {
+      return res.status(401).json({ error: 'Invalid or expired refresh token' });
+    }
+    res.json(tokens);
+  } catch (err) {
+    console.error('Refresh error:', err.message);
+    res.status(500).json({ error: 'Refresh failed' });
+  }
+});
 
 app.use(healthRoutes(llm, sessionManager, memoryManager));
-app.use(commandRoutes(commandRouter, protectedAuth));
-app.use(memoryRoutes(memoryManager, protectedAuth));
-app.use(skillRoutes(memoryManager, protectedAuth));
+app.use(commandRoutes(commandRouter, authMiddleware));
+app.use(memoryRoutes(memoryManager, authMiddleware));
+app.use(skillRoutes(memoryManager, authMiddleware));
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -148,7 +152,7 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 const wsCommandCounts = new Map();
 const WS_RATE_LIMIT = 20;
 
-wss.on('connection', (ws, req) => {
+wss.on('connection', async (ws, req) => {
   if (wss.clients.size > CONFIG.wsMaxConnections) {
     ws.close(1013, 'Server full');
     return;
@@ -163,8 +167,8 @@ wss.on('connection', (ws, req) => {
     return;
   }
 
-  const tokenEntry = deviceTokens.get(deviceId);
-  if (!tokenEntry || tokenEntry.token !== token) {
+  const valid = await deviceSessions.validateToken(deviceId, token);
+  if (!valid) {
     ws.close(4001, 'Invalid token');
     return;
   }
