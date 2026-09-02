@@ -1,5 +1,6 @@
 import express from "express";
 import { z } from "zod";
+import { createEndpointRateLimit, RATE_LIMITS } from "../middleware/rateLimit.js";
 
 const registerSchema = z.object({
   device_id: z.string().min(1),
@@ -16,7 +17,11 @@ const refreshSchema = z.object({
 export function createAuthRoutes(tokenService, enrollmentService, sessionService, wsTicketStore) {
   const router = express.Router();
 
-  router.post("/enroll", async (req, res) => {
+  const enrollRateLimit = createEndpointRateLimit(RATE_LIMITS.DEVICE_REGISTRATION);
+  const tokenRateLimit = createEndpointRateLimit(RATE_LIMITS.DEVICE_REGISTRATION);
+  const refreshRateLimit = createEndpointRateLimit(RATE_LIMITS.TOKEN_REFRESH);
+
+  router.post("/enroll", enrollRateLimit, async (req, res) => {
     try {
       const { device_id, device_name, device_model, os_version } = req.body;
       if (!device_id) {
@@ -49,7 +54,7 @@ export function createAuthRoutes(tokenService, enrollmentService, sessionService
     }
   });
 
-  router.post("/token", async (req, res) => {
+  router.post("/token", tokenRateLimit, async (req, res) => {
     try {
       const validation = registerSchema.safeParse(req.body);
       if (!validation.success) {
@@ -84,7 +89,7 @@ export function createAuthRoutes(tokenService, enrollmentService, sessionService
     }
   });
 
-  router.post("/refresh", async (req, res) => {
+  router.post("/refresh", refreshRateLimit, async (req, res) => {
     try {
       const validation = refreshSchema.safeParse(req.body);
       if (!validation.success) {

@@ -14,7 +14,7 @@ import { SessionService } from './auth/sessionService.js';
 import { EnrollmentService } from './auth/enrollmentService.js';
 import { WebSocketAuth } from './auth/websocketAuth.js';
 import { createAuthMiddleware } from './middleware/auth.js';
-import { createRateLimitMiddleware } from './middleware/rateLimit.js';
+import { createRateLimitMiddleware, createEndpointRateLimit, RATE_LIMITS } from './middleware/rateLimit.js';
 import { healthRoutes } from './routes/health.js';
 import { commandRoutes } from './routes/command.js';
 import { memoryRoutes } from './routes/memory.js';
