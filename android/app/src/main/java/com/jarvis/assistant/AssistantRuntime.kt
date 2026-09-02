@@ -1,4 +1,4 @@
-package com.jarvis.runtime
+package com.jarvis.assistant
 
 import android.content.Context
 import android.util.Log
@@ -20,13 +20,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
-
-enum class RuntimeState {
-    UNINITIALIZED,
-    INITIALIZING,
-    READY,
-    ERROR
-}
 
 class AssistantRuntime(private val context: Context) {
     companion object {

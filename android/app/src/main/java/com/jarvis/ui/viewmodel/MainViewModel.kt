@@ -7,8 +7,8 @@ import com.jarvis.auth.AuthState
 import com.jarvis.automation.ConfirmationRequest
 import com.jarvis.automation.ConfirmationResult
 import com.jarvis.backend.ConnectionState
-import com.jarvis.runtime.AssistantRuntime
-import com.jarvis.runtime.RuntimeState
+import com.jarvis.assistant.AssistantRuntime
+import com.jarvis.assistant.RuntimeState
 import com.jarvis.runtime.VoiceState
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
