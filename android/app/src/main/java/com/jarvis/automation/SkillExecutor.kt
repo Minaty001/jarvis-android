@@ -116,21 +116,54 @@ class SkillExecutor(
                 val sent = automationController.sendSms(phone, message)
                 if (sent.success) ActionResult.Success else ActionResult.Failed("SMS failed")
             }
-            ActionType.BLUETOOTH_ON -> if (automationController.toggleBluetooth(true)) ActionResult.Success else ActionResult.Failed("BT on failed")
-            ActionType.BLUETOOTH_OFF -> if (automationController.toggleBluetooth(false)) ActionResult.Success else ActionResult.Failed("BT off failed")
-            ActionType.BLUETOOTH_TOGGLE -> if (automationController.toggleBluetoothAuto()) ActionResult.Success else ActionResult.Failed("BT toggle failed")
-            ActionType.WIFI_ON -> if (automationController.toggleWifi(true)) ActionResult.Success else ActionResult.Success
-            ActionType.WIFI_OFF -> if (automationController.toggleWifi(false)) ActionResult.Success else ActionResult.Failed("WiFi off failed")
-            ActionType.WIFI_TOGGLE -> if (automationController.toggleWifiAuto()) ActionResult.Success else ActionResult.Failed("WiFi toggle failed")
-            ActionType.BATTERY_STATUS -> ActionResult.BatteryInfo(automationController.getBatterySummary())
-            ActionType.CALENDAR_TODAY -> ActionResult.CalendarInfo(automationController.getCalendarSummary())
-            ActionType.CALENDAR_SEARCH -> {
-                val query = action.params["query"] ?: ""
-                if (query.isBlank()) return ActionResult.Failed("Missing query")
-                val events = automationController.searchCalendar(query)
-                ActionResult.CalendarInfo(events.joinToString { it.title })
+            ActionType.MAKE_CALL -> {
+                val phone = action.params["phone"] ?: ""
+                if (phone.isBlank()) return ActionResult.Failed("Missing phone")
+                ActionResult.Failed("make_call not yet implemented")
             }
-            ActionType.SHARE_TEXT -> {
+            ActionType.OPEN_URL -> {
+                val url = action.params["url"] ?: ""
+                if (url.isBlank()) return ActionResult.Failed("Missing url")
+                ActionResult.Unsupported("open_url not yet implemented")
+            }
+            ActionType.MEDIA_CONTROL -> {
+                ActionResult.Unsupported("media_control not yet implemented")
+            }
+            ActionType.BLUETOOTH -> {
+                val btAction = action.params["action"] ?: "toggle"
+                val result = when (btAction) {
+                    "on" -> automationController.toggleBluetooth(true)
+                    "off" -> automationController.toggleBluetooth(false)
+                    "toggle" -> automationController.toggleBluetoothAuto()
+                    else -> false
+                }
+                if (result) ActionResult.Success else ActionResult.Failed("Bluetooth $btAction failed")
+            }
+            ActionType.WIFI -> {
+                val wifiAction = action.params["action"] ?: "toggle"
+                val result = when (wifiAction) {
+                    "on" -> automationController.toggleWifi(true)
+                    "off" -> automationController.toggleWifi(false)
+                    "toggle" -> automationController.toggleWifiAuto()
+                    else -> false
+                }
+                if (result) ActionResult.Success else ActionResult.Failed("WiFi $wifiAction failed")
+            }
+            ActionType.BATTERY_STATUS -> ActionResult.BatteryInfo(automationController.getBatterySummary())
+            ActionType.CALENDAR -> {
+                val calAction = action.params["action"] ?: "today"
+                when (calAction) {
+                    "today" -> ActionResult.CalendarInfo(automationController.getCalendarSummary())
+                    "search" -> {
+                        val query = action.params["query"] ?: ""
+                        if (query.isBlank()) return ActionResult.Failed("Missing query")
+                        val events = automationController.searchCalendar(query)
+                        ActionResult.CalendarInfo(events.joinToString { it.title })
+                    }
+                    else -> ActionResult.Failed("Unknown calendar action: $calAction")
+                }
+            }
+            ActionType.SHARE -> {
                 val text = action.params["text"] ?: ""
                 if (text.isBlank()) return ActionResult.Failed("Missing text")
                 if (automationController.shareText(text)) ActionResult.Success else ActionResult.Failed("Share failed")
