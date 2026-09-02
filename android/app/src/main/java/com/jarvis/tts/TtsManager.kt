@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.jarvis.core.PerformanceMonitor
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -87,7 +88,10 @@ class TtsManager(private val context: Context) : TtsEngine {
             pendingQueue.add(text)
             return
         }
+        val start = PerformanceMonitor.startTimer("tts_speak")
+        _state.value = TtsState.SPEAKING
         speakInternal(text)
+        PerformanceMonitor.endTimer("tts_speak", start)
     }
 
     private fun speakInternal(text: String) {

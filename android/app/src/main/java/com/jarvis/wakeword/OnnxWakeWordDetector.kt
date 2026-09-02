@@ -6,6 +6,7 @@ import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import com.jarvis.core.PerformanceMonitor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -326,6 +327,7 @@ class OnnxWakeWordDetector(
         val session = melSession ?: return null
         val shape = longArrayOf(1, audio.size.toLong())
         val tensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(audio), shape)
+        val start = PerformanceMonitor.startTimer("onnx_mel")
         return try {
             session.run(mapOf(MEL_INPUT to tensor)).use { result ->
                 val flat = resultToFloatArray(result) ?: return null
@@ -336,6 +338,7 @@ class OnnxWakeWordDetector(
             Log.e(TAG, "Mel spectrogram inference failed", e)
             null
         } finally {
+            PerformanceMonitor.endTimer("onnx_mel", start)
             tensor.close()
         }
     }
@@ -370,6 +373,7 @@ class OnnxWakeWordDetector(
         }
         val shape = longArrayOf(nWindows.toLong(), EMBEDDING_WINDOW.toLong(), N_MELS.toLong(), 1)
         val tensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(input), shape)
+        val start = PerformanceMonitor.startTimer("onnx_embedding")
         return try {
             session.run(mapOf(EMB_INPUT to tensor)).use { result ->
                 val flat = resultToFloatArray(result) ?: return null
@@ -383,6 +387,7 @@ class OnnxWakeWordDetector(
             Log.e(TAG, "Embedding inference failed", e)
             null
         } finally {
+            PerformanceMonitor.endTimer("onnx_embedding", start)
             tensor.close()
         }
     }
@@ -391,6 +396,7 @@ class OnnxWakeWordDetector(
         val session = clsSession ?: return 0f
         val shape = longArrayOf(1, MIN_EMBEDDINGS.toLong(), EMBEDDING_DIM.toLong())
         val tensor = OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(last16), shape)
+        val start = PerformanceMonitor.startTimer("onnx_classifier")
         return try {
             session.run(mapOf(CLS_INPUT to tensor)).use { result ->
                 resultToFloatArray(result)?.firstOrNull() ?: 0f
@@ -399,6 +405,7 @@ class OnnxWakeWordDetector(
             Log.e(TAG, "Classifier inference failed", e)
             0f
         } finally {
+            PerformanceMonitor.endTimer("onnx_classifier", start)
             tensor.close()
         }
     }

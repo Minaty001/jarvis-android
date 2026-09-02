@@ -1,6 +1,7 @@
 package com.jarvis.automation
 
 import android.util.Log
+import com.jarvis.core.PerformanceMonitor
 import org.json.JSONObject
 
 sealed interface ActionResult {
@@ -37,6 +38,7 @@ class SkillExecutor(
             return false
         }
 
+        val planStart = PerformanceMonitor.startTimer("action_plan_total")
         for (action in plan.actions) {
             if (ActionValidator.requiresConfirmation(JSONObject().put("type", action.type.value))) {
                 val paramMap = action.params.toMutableMap()
@@ -47,7 +49,9 @@ class SkillExecutor(
                 }
             }
 
+            val actionStart = PerformanceMonitor.startTimer("action_${action.type.value}")
             val result = executeAction(action)
+            PerformanceMonitor.endTimer("action_${action.type.value}", actionStart)
             when (result) {
                 is ActionResult.Success -> { /* continue */ }
                 is ActionResult.ScreenContent -> { lastScreenContent = result.content }
@@ -89,6 +93,7 @@ class SkillExecutor(
 
             kotlinx.coroutines.delay(300)
         }
+        PerformanceMonitor.endTimer("action_plan_total", planStart)
         return true
     }
 

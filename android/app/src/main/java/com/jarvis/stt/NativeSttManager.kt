@@ -9,6 +9,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
+import com.jarvis.core.PerformanceMonitor
 
 class NativeSttManager(private val context: Context) : SttEngine {
     companion object {
@@ -17,6 +18,7 @@ class NativeSttManager(private val context: Context) : SttEngine {
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT
         )
+        private var sttListenStart = 0L
     }
 
     private var speechRecognizer: SpeechRecognizer? = null
@@ -96,6 +98,7 @@ class NativeSttManager(private val context: Context) : SttEngine {
         try {
             speechRecognizer?.startListening(intent)
             _isListening = true
+            sttListenStart = PerformanceMonitor.startTimer("stt_listen")
             Log.d(TAG, "SpeechRecognizer started")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start listening", e)
@@ -141,6 +144,7 @@ class NativeSttManager(private val context: Context) : SttEngine {
 
         override fun onResults(results: Bundle?) {
             _isListening = false
+            PerformanceMonitor.endTimer("stt_listen", sttListenStart)
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if (!matches.isNullOrEmpty()) {
                 val text = matches[0]
