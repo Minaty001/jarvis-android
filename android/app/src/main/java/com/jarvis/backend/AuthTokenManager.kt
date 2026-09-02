@@ -2,11 +2,9 @@ package com.jarvis.backend
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Base64
 import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import org.json.JSONObject
 
 class AuthTokenManager(context: Context) {
 
@@ -17,6 +15,7 @@ class AuthTokenManager(context: Context) {
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_TRUSTED = "trusted"
+        private const val KEY_ACCESS_EXPIRY = "access_expiry_ms"
     }
 
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
@@ -33,14 +32,16 @@ class AuthTokenManager(context: Context) {
     val isTrusted: Boolean get() = prefs.getBoolean(KEY_TRUSTED, false)
     val isAuthenticated: Boolean get() = accessToken != null
 
-    fun saveTokens(access: String, refresh: String, deviceId: String, trusted: Boolean = false) {
+    fun saveTokens(access: String, refresh: String, deviceId: String, expiresIn: Int = 86400, trusted: Boolean = false) {
+        val expiryMs = System.currentTimeMillis() + (expiresIn * 1000L)
         prefs.edit()
             .putString(KEY_ACCESS_TOKEN, access)
             .putString(KEY_REFRESH_TOKEN, refresh)
             .putString(KEY_DEVICE_ID, deviceId)
             .putBoolean(KEY_TRUSTED, trusted)
+            .putLong(KEY_ACCESS_EXPIRY, expiryMs)
             .apply()
-        Log.i(TAG, "Tokens saved for device: $deviceId")
+        Log.i(TAG, "Tokens saved for device: $deviceId (expires in ${expiresIn}s)")
     }
 
     fun saveDeviceId(deviceId: String) {
@@ -48,37 +49,21 @@ class AuthTokenManager(context: Context) {
     }
 
     fun isTokenExpired(token: String): Boolean {
-        return try {
-            val payload = decodeJwtPayload(token)
-            val exp = payload.optLong("exp", 0)
-            val now = System.currentTimeMillis() / 1000
-            exp < now
-        } catch (e: Exception) {
-            true
-        }
+        if (token.isBlank()) return true
+        val storedToken = accessToken
+        if (token != storedToken) return true
+        val expiryMs = prefs.getLong(KEY_ACCESS_EXPIRY, 0)
+        if (expiryMs == 0L) return true
+        return System.currentTimeMillis() >= expiryMs
     }
 
     fun getTokenExpiryMs(token: String): Long {
-        return try {
-            val payload = decodeJwtPayload(token)
-            val exp = payload.optLong("exp", 0)
-            val now = System.currentTimeMillis() / 1000
-            ((exp - now) * 1000).coerceAtLeast(0)
-        } catch (e: Exception) {
-            0
-        }
+        val expiryMs = prefs.getLong(KEY_ACCESS_EXPIRY, 0)
+        return (expiryMs - System.currentTimeMillis()).coerceAtLeast(0)
     }
 
     fun clearTokens() {
         prefs.edit().clear().apply()
         Log.i(TAG, "Tokens cleared")
-    }
-
-    private fun decodeJwtPayload(token: String): JSONObject {
-        val parts = token.split(".")
-        if (parts.size < 2) throw IllegalArgumentException("Invalid JWT")
-        val payload = parts[1]
-        val decoded = Base64.decode(payload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        return JSONObject(String(decoded))
     }
 }

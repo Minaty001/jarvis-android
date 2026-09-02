@@ -8,6 +8,14 @@ interface ConfirmationGate {
     suspend fun requestConfirmation(actionType: String, riskLevel: RiskLevel, params: Map<String, String>): Boolean
 }
 
+data class ActionResult(
+    val success: Boolean,
+    val screenContent: String? = null,
+    val batterySummary: String? = null,
+    val calendarSummary: String? = null,
+    val reason: String? = null
+)
+
 class SkillExecutor(
     private val automationController: AutomationController,
     private val confirmationGate: ConfirmationGate? = null
@@ -15,6 +23,9 @@ class SkillExecutor(
     companion object {
         private const val TAG = "SkillExecutor"
     }
+
+    var lastScreenContent: String? = null
+        private set
 
     suspend fun execute(actionsJson: org.json.JSONArray): Boolean {
         for (i in 0 until actionsJson.length()) {
@@ -41,52 +52,100 @@ class SkillExecutor(
                 }
             }
 
-            val success = when (type) {
-                "open_app" -> {
-                    val pkg = params.optString("package", "")
-                    if (pkg.isNotBlank()) automationController.appController.launchApp(pkg) else false
-                }
-                "tap" -> automationController.tapElement(params.optString("text", ""))
-                "type" -> automationController.typeText(params.optString("text", ""))
-                "swipe" -> {
-                    val service = JarvisAccessibilityService.instance
-                    when (params.optString("direction", "up")) {
-                        "up" -> service?.swipeUp() ?: false
-                        "down" -> service?.swipeDown() ?: false
-                        "left" -> service?.swipeLeft() ?: false
-                        "right" -> service?.swipeRight() ?: false
-                        else -> false
-                    }
-                }
-                "wait" -> { kotlinx.coroutines.delay(params.optLong("durationMs", 1000)); true }
-                "go_back" -> automationController.goBack()
-                "go_home" -> automationController.goHome()
-                "read_screen" -> { automationController.readScreen(); true }
-                "send_sms" -> {
-                    val phone = params.optString("phone", "")
-                    val message = params.optString("message", "")
-                    if (phone.isNotBlank() && message.isNotBlank()) automationController.sendSms(phone, message).success else false
-                }
-                "bluetooth_on" -> automationController.toggleBluetooth(true)
-                "bluetooth_off" -> automationController.toggleBluetooth(false)
-                "bluetooth_toggle" -> automationController.toggleBluetoothAuto()
-                "wifi_on" -> automationController.toggleWifi(true)
-                "wifi_off" -> automationController.toggleWifi(false)
-                "wifi_toggle" -> automationController.toggleWifiAuto()
-                "battery_status" -> { Log.d(TAG, automationController.getBatterySummary()); true }
-                "calendar_today" -> { Log.d(TAG, automationController.getCalendarSummary()); true }
-                "calendar_search" -> {
-                    val query = params.optString("query", "")
-                    Log.d(TAG, automationController.searchCalendar(query).joinToString { it.title })
-                    true
-                }
-                "share_text" -> automationController.shareText(params.optString("text", ""))
-                else -> { Log.w(TAG, "Unknown action type: $type"); false }
+            val result = executeAction(type, params)
+            if (!result.success) {
+                Log.e(TAG, "Action failed: $type (reason: ${result.reason})")
+                return false
             }
 
-            if (!success) { Log.e(TAG, "Action failed: $type"); return false }
-            kotlinx.coroutines.delay(500)
+            lastScreenContent = result.screenContent
+
+            kotlinx.coroutines.delay(300)
         }
         return true
+    }
+
+    private suspend fun executeAction(type: String, params: org.json.JSONObject): ActionResult {
+        return when (type) {
+            "open_app" -> {
+                val pkg = params.optString("package", "")
+                if (pkg.isNotBlank()) {
+                    val launched = automationController.appController.launchApp(pkg)
+                    ActionResult(launched, reason = if (!launched) "App not found: $pkg" else null)
+                } else {
+                    ActionResult(false, reason = "Missing package parameter")
+                }
+            }
+            "tap" -> {
+                val text = params.optString("text", "")
+                ActionResult(automationController.tapElement(text), reason = if (text.isBlank()) "Missing text parameter" else null)
+            }
+            "type" -> {
+                val text = params.optString("text", "")
+                ActionResult(automationController.typeText(text), reason = if (text.isBlank()) "Missing text parameter" else null)
+            }
+            "swipe" -> {
+                val service = JarvisAccessibilityService.instance
+                if (service == null) {
+                    ActionResult(false, reason = "Accessibility service not enabled")
+                } else {
+                    val dir = params.optString("direction", "up")
+                    val ok = when (dir) {
+                        "up" -> service.swipeUp()
+                        "down" -> service.swipeDown()
+                        "left" -> service.swipeLeft()
+                        "right" -> service.swipeRight()
+                        else -> false
+                    }
+                    ActionResult(ok, reason = if (!ok) "Swipe failed" else null)
+                }
+            }
+            "wait" -> {
+                val ms = params.optLong("durationMs", 1000).coerceIn(0, 30000)
+                kotlinx.coroutines.delay(ms)
+                ActionResult(true)
+            }
+            "go_back" -> ActionResult(automationController.goBack())
+            "go_home" -> ActionResult(automationController.goHome())
+            "read_screen" -> {
+                val content = automationController.readScreen()
+                ActionResult(content.isNotBlank(), screenContent = content, reason = if (content.isBlank()) "No screen content" else null)
+            }
+            "send_sms" -> {
+                val phone = params.optString("phone", "")
+                val message = params.optString("message", "")
+                if (phone.isNotBlank() && message.isNotBlank()) {
+                    val sent = automationController.sendSms(phone, message)
+                    ActionResult(sent.success, reason = if (!sent.success) "SMS failed" else null)
+                } else {
+                    ActionResult(false, reason = "Missing phone or message")
+                }
+            }
+            "bluetooth_on" -> ActionResult(automationController.toggleBluetooth(true))
+            "bluetooth_off" -> ActionResult(automationController.toggleBluetooth(false))
+            "bluetooth_toggle" -> ActionResult(automationController.toggleBluetoothAuto())
+            "wifi_on" -> ActionResult(automationController.toggleWifi(true))
+            "wifi_off" -> ActionResult(automationController.toggleWifi(false))
+            "wifi_toggle" -> ActionResult(automationController.toggleWifiAuto())
+            "battery_status" -> {
+                val summary = automationController.getBatterySummary()
+                ActionResult(true, batterySummary = summary)
+            }
+            "calendar_today" -> {
+                val summary = automationController.getCalendarSummary()
+                ActionResult(true, calendarSummary = summary)
+            }
+            "calendar_search" -> {
+                val query = params.optString("query", "")
+                val events = automationController.searchCalendar(query)
+                val summary = events.joinToString { it.title }
+                ActionResult(true, calendarSummary = summary)
+            }
+            "share_text" -> {
+                val text = params.optString("text", "")
+                ActionResult(automationController.shareText(text), reason = if (text.isBlank()) "Missing text" else null)
+            }
+            else -> ActionResult(false, reason = "Unknown action type: $type")
+        }
     }
 }

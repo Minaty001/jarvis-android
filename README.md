@@ -18,26 +18,27 @@ Backend (Node.js/Express)
     ├── LLM: Groq → OpenRouter → NVIDIA NIM (fallback chain)
     ├── Memory: Supabase pgvector (cosine similarity) / keyword fallback
     ├── Skills: 3-tier matching (exact → semantic → LLM)
-    ├── Auth: JWT device registration + token refresh
-    ├── Rate Limiting: 30 req/min per IP
-    └── WebSocket: Real-time command streaming
+    ├── Auth: Opaque bearer token + device registration
+    ├── Rate Limiting: 30 req/min per IP, 20 cmd/min per WS connection
+    └── WebSocket: Real-time command streaming (Zod-validated messages)
 ```
 
 ## Features
 
 ### Voice
 - **Wake word detection**: ONNX 3-model pipeline (melspectrogram + embedding + classifier) — fully offline, zero cloud dependency
-- **Double clap activation**: Audio RMS-based clap detection
 - **STT**: Android SpeechRecognizer (cloud-dependent system service)
 - **TTS**: Android TextToSpeech engine
+- **VoiceInputMode**: OFF → WAKE_WORD → COMMAND state machine
 
 ### Automation
 - Open/close any app (70+ aliases)
 - Tap, swipe, type via AccessibilityService
-- Read screen content (password-masked)
-- YouTube/Chrome/WhatsApp sequences
+- Read screen content (password-masked, returned to LLM)
+- YouTube/Chrome/WhatsApp sequences (event-based waits, no Thread.sleep)
 - Action validation with risk levels (AUTOMATIC/LOW/MEDIUM/HIGH/FORBIDDEN)
-- Privacy filter for sensitive screen content
+- Confirmation dialog for high-risk actions (SMS, etc.)
+- Strict backend LLM action schema (18 allowed types, per-action param validation)
 
 ### Memory & Learning
 - pgvector cosine similarity search (when NVIDIA NIM available)
@@ -47,11 +48,17 @@ Backend (Node.js/Express)
 - Record & execute learned skills
 
 ### Security
-- JWT device registration + token refresh
+- Opaque bearer token (crypto.randomBytes) with server-side storage
 - EncryptedSharedPreferences for token storage
-- ActionValidator with confirmation for high-risk actions
+- ActionValidator blocks unknown actions + validates per-action params
+- Confirmation gate for high-risk actions (suspendCancellableCoroutine + Compose dialog)
 - PrivacyFilter blocks sensitive screen content from LLM
 - Feature-gated permissions (on-demand, not bulk)
+- Backend auth middleware on all protected REST routes
+- WebSocket requires valid token + device ID on connection
+- WS messages Zod-validated (discriminated union: command | ping)
+- Per-connection WS rate limiting (20 cmd/min)
+- Cleartext traffic disabled (network_security_config.xml for localhost only)
 
 ### Connectivity
 - Bluetooth toggle, discovery, pairing
@@ -89,26 +96,44 @@ Server runs on `http://localhost:10000`
 2. Sync Gradle
 3. Run on device or emulator
 
-**Note**: The ONNX wake word models (`melspectrogram.onnx`, `embedding_model.onnx`, `hey_jarvis.onnx`) are included in `android/app/src/main/assets/wakeword/` and are loaded on-device at startup.
+**Note**: The ONNX wake word models (`melspectrogram.onnx`, `embedding_model.onnx`, `hey_jarvis.onnx`) are included in `android/app/src/main/assets/wakeword/` and are loaded asynchronously at detector construction.
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /health | Server status + LLM providers |
-| POST | /api/v1/auth/token | Device registration (returns JWT) |
+| POST | /api/v1/auth/token | Device registration (returns opaque token) |
 | POST | /api/v1/auth/refresh | Token refresh |
-| POST | /command | Send voice command |
-| WS | /ws?device=ID | WebSocket command stream |
-| GET | /memory/search | Search memories (pgvector/keyword) |
-| GET | /memory/recent | Recent memories |
-| POST | /memory/store | Store a memory |
-| DELETE | /memory/:id | Delete a memory |
-| GET | /memory/stats | Memory + skill counts |
-| POST | /skill/learn | Learn a new skill |
-| GET | /skill/match | Match command to skill |
-| GET | /skill/list | List all skills |
-| DELETE | /skill/:id | Delete a skill |
+| POST | /command | Send voice command (auth required) |
+| WS | /ws?device=ID&token=TOKEN | WebSocket command stream (auth required) |
+| GET | /memory/search | Search memories (auth required) |
+| GET | /memory/recent | Recent memories (auth required) |
+| POST | /memory/store | Store a memory (auth required) |
+| DELETE | /memory/:id | Delete a memory (auth required, ownership enforced) |
+| GET | /memory/stats | Memory + skill counts (auth required) |
+| POST | /skill/learn | Learn a new skill (auth required) |
+| GET | /skill/match | Match command to skill (auth required) |
+| GET | /skill/list | List all skills (auth required) |
+| DELETE | /skill/:id | Delete a skill (auth required, ownership enforced) |
+
+## Auth Flow
+
+```
+App start
+    ↓
+load installation UUID (Config.getDeviceId)
+    ↓
+POST /api/v1/auth/token { device_id: uuid }
+    ↓
+save opaque access_token + refresh_token + expiry
+    ↓
+WebSocket connect (?device=uuid&token=access_token)
+    ↓
+REST calls with Authorization: Bearer access_token
+    ↓
+on 401 → POST /api/v1/auth/refresh → update tokens
+```
 
 ## Deployment
 
@@ -126,11 +151,11 @@ Run `supabase/schema.sql` in Supabase SQL Editor to create:
 ## Tech Stack
 
 - **Android**: Kotlin, Jetpack Compose, Room, WorkManager, ONNX Runtime Mobile
-- **Backend**: Node.js, Express, WebSocket, Zod
+- **Backend**: Node.js, Express, WebSocket, Zod, crypto
 - **Database**: Supabase (PostgreSQL + pgvector)
 - **LLM**: Groq, OpenRouter, NVIDIA NIM
 - **Wake Word**: ONNX 3-model pipeline (offline, on-device)
-- **Auth**: JWT with encrypted local storage
+- **Auth**: Opaque bearer tokens with encrypted local storage
 
 ## Project Structure
 
@@ -163,7 +188,7 @@ project1/
 ├── backend/                    # Node.js backend
 │   └── src/
 │       ├── core/               # LLM, CommandRouter, MemoryManager, SessionManager
-│       ├── middleware/         # Sanitization
+│       ├── middleware/         # Sanitization, Auth
 │       └── routes/             # REST endpoints
 └── supabase/                   # Database schema
 ```
@@ -181,4 +206,5 @@ Features:
 - **Adaptive Noise Gate**: Auto-calibrates noise floor, skips inference for quiet audio
 - **Cooldown**: 4-second debounce after confirmed detection
 - **Fully offline**: Zero cloud dependency for wake word detection
-- **Configurable sensitivity**: Low/Medium/High (0.55-0.92 threshold range)
+- **Async loading**: Models load on Dispatchers.IO, not blocking main thread
+- **Configurable sensitivity**: Low/Medium/High (0.3–0.7 threshold range)

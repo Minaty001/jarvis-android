@@ -21,6 +21,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.work.*
 import com.jarvis.automation.*
 import com.jarvis.audio.ClapDetector
+import com.jarvis.backend.ApiClient
 import com.jarvis.backend.AuthTokenManager
 import com.jarvis.backend.ConnectionManager
 import com.jarvis.backend.WebSocketClient
@@ -51,11 +52,10 @@ class MainActivity : ComponentActivity() {
     private var wakeEngine: LiveKitWakeWordEngine? = null
     private var sttManager: NativeSttManager? = null
     private var ttsManager: TtsManager? = null
-    private var clapDetector: ClapDetector? = null
     private var authTokenManager: AuthTokenManager? = null
     private var sendCommand: ((String) -> Unit)? = null
+    private var wakeWordEnabled = false
     private var voiceMode = VoiceInputMode.OFF
-    private val authToken: AuthTokenManager by lazy { AuthTokenManager(this) }
 
     private val automationController by lazy { AutomationController(this) }
 
@@ -121,8 +121,8 @@ class MainActivity : ComponentActivity() {
                     onEnableAutomation = automationController::openAccessibilitySettings,
                     isListening = { isListeningActive },
                     onToggleWakeWord = { toggleWakeWord() },
-                    isWakeWordEnabled = { voiceMode == VoiceInputMode.WAKE_WORD },
-                    authTokenManager = authToken
+                    isWakeWordEnabled = { wakeWordEnabled },
+                    authTokenManager = authTokenManager
                 )
             }
         }
@@ -186,12 +186,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toggleWakeWord() {
-        if (voiceMode == VoiceInputMode.WAKE_WORD) {
+        if (wakeWordEnabled) {
             wakeEngine?.stop()
+            wakeWordEnabled = false
             voiceMode = VoiceInputMode.OFF
             Log.i(TAG, "Wake word disabled")
         } else {
             wakeEngine?.startMonitoring()
+            wakeWordEnabled = true
             voiceMode = VoiceInputMode.WAKE_WORD
             Log.i(TAG, "Wake word enabled")
         }
@@ -211,27 +213,26 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "Listening...", Toast.LENGTH_SHORT).show()
 
         wakeEngine?.pause()
-        clapDetector?.stop()
 
         val started = stt.startListening(
             onResult = { text ->
                 isListeningActive = false
-                wakeEngine?.resume()
-                voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+                voiceMode = if (wakeWordEnabled) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+                if (wakeWordEnabled) wakeEngine?.resume()
                 sendCommandToBackend(text)
             },
             onPartialResult = { },
             onError = { errorMsg ->
                 isListeningActive = false
-                wakeEngine?.resume()
-                voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+                voiceMode = if (wakeWordEnabled) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+                if (wakeWordEnabled) wakeEngine?.resume()
                 Toast.makeText(this, errorMsg, Toast.LENGTH_SHORT).show()
             }
         )
         if (!started) {
             isListeningActive = false
-            wakeEngine?.resume()
-            voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+            voiceMode = if (wakeWordEnabled) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+            if (wakeWordEnabled) wakeEngine?.resume()
         }
     }
 
@@ -239,7 +240,8 @@ class MainActivity : ComponentActivity() {
         if (isListeningActive) {
             sttManager?.stopListening()
             isListeningActive = false
-            wakeEngine?.resume()
+            voiceMode = if (wakeWordEnabled) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
+            if (wakeWordEnabled) wakeEngine?.resume()
         } else {
             activateListening()
         }
@@ -277,7 +279,6 @@ class MainActivity : ComponentActivity() {
         wakeEngine?.release()
         sttManager?.release()
         ttsManager?.shutdown()
-        clapDetector?.stop()
     }
 }
 
@@ -339,9 +340,22 @@ fun JarvisApp(
 ) {
     var currentScreen by remember { mutableStateOf("home") }
     var isConnected by remember { mutableStateOf(false) }
+    var isAuthReady by remember { mutableStateOf(authTokenManager?.isAuthenticated == true) }
     var chatMessages by remember { mutableStateOf(listOf<Pair<String, Boolean>>()) }
+    val scope = rememberCoroutineScope()
 
-    val wsClient = remember {
+    LaunchedEffect(authTokenManager) {
+        if (authTokenManager?.isAuthenticated != true) {
+            val apiClient = ApiClient(authTokenManager = authTokenManager)
+            val deviceId = com.jarvis.config.Config.getDeviceId(
+               @Suppress("StaticFieldLeak") object : android.content.ContextWrapper(null) {
+                    override fun getSystemService(name: String): Any? = null
+                }
+            )
+        }
+    }
+
+    val wsClient = remember(isAuthReady) {
         WebSocketClient(
             wsUrl = Config.BACKEND_WS_URL,
             authTokenManager = authTokenManager,
@@ -369,8 +383,13 @@ fun JarvisApp(
 
     SideEffect { onCommandReady { command -> wsClient.sendCommand(command) } }
 
+    LaunchedEffect(isAuthReady) {
+        if (isAuthReady) {
+            wsClient.connect()
+        }
+    }
+
     DisposableEffect(Unit) {
-        wsClient.connect()
         onDispose { wsClient.disconnect() }
     }
 

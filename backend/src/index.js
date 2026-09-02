@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import crypto from 'node:crypto';
+import { z } from 'zod';
 import { CONFIG } from './config.js';
 import { LLMOrchestrator } from './core/llmOrchestrator.js';
 import { SessionManager } from './core/sessionManager.js';
@@ -68,7 +70,7 @@ app.use((req, res, next) => {
 });
 
 function generateToken() {
-  return Array.from({ length: 64 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
+  return crypto.randomBytes(32).toString('base64url');
 }
 
 app.post('/api/v1/auth/token', (req, res) => {
@@ -137,7 +139,14 @@ app.use((req, res) => {
 
 const server = createServer(app);
 
+const WsMessageSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('command'), command: z.string().min(1).max(2000) }),
+  z.object({ type: z.literal('ping') }),
+]);
+
 const wss = new WebSocketServer({ server, path: '/ws' });
+const wsCommandCounts = new Map();
+const WS_RATE_LIMIT = 20;
 
 wss.on('connection', (ws, req) => {
   if (wss.clients.size > CONFIG.wsMaxConnections) {
@@ -161,12 +170,33 @@ wss.on('connection', (ws, req) => {
   }
 
   const session = sessionManager.create(deviceId);
+  wsCommandCounts.set(ws, { count: 0, resetAt: Date.now() + 60000 });
   console.log(`WebSocket connected: ${deviceId}`);
 
   ws.on('message', async (raw) => {
-    try {
-      const msg = JSON.parse(raw.toString());
+    const record = wsCommandCounts.get(ws);
+    if (record) {
+      const now = Date.now();
+      if (now > record.resetAt) {
+        record.count = 0;
+        record.resetAt = now + 60000;
+      }
+      record.count++;
+      if (record.count > WS_RATE_LIMIT) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Rate limit exceeded' }));
+        return;
+      }
+    }
 
+    try {
+      const rawJson = JSON.parse(raw.toString());
+      const parsed = WsMessageSchema.safeParse(rawJson);
+      if (!parsed.success) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid message format' }));
+        return;
+      }
+
+      const msg = parsed.data;
       if (msg.type === 'command') {
         const result = await commandRouter.route(msg.command, session, deviceId);
         ws.send(JSON.stringify({ type: 'response', data: result }));
@@ -180,6 +210,7 @@ wss.on('connection', (ws, req) => {
   });
 
   ws.on('close', () => {
+    wsCommandCounts.delete(ws);
     console.log(`WebSocket disconnected: ${deviceId}`);
   });
 

@@ -1,17 +1,55 @@
 import { z } from 'zod';
 
+const ActionParams = {
+  open_app: z.object({ package: z.string().min(1) }),
+  tap: z.object({ text: z.string().min(1) }),
+  type: z.object({ text: z.string().min(1) }),
+  swipe: z.object({ direction: z.enum(['up', 'down', 'left', 'right']).optional().default('up') }),
+  wait: z.object({ durationMs: z.number().int().min(0).max(30000).optional().default(1000) }),
+  go_back: z.object({}).optional().default({}),
+  go_home: z.object({}).optional().default({}),
+  read_screen: z.object({}).optional().default({}),
+  send_sms: z.object({ phone: z.string().min(1), message: z.string().min(1) }),
+  share_text: z.object({ text: z.string().min(1) }),
+  bluetooth_on: z.object({}).optional().default({}),
+  bluetooth_off: z.object({}).optional().default({}),
+  bluetooth_toggle: z.object({}).optional().default({}),
+  wifi_on: z.object({}).optional().default({}),
+  wifi_off: z.object({}).optional().default({}),
+  wifi_toggle: z.object({}).optional().default({}),
+  battery_status: z.object({}).optional().default({}),
+  calendar_today: z.object({}).optional().default({}),
+  calendar_search: z.object({ query: z.string().min(1) }),
+};
+
+const ALLOWEDActionTypes = Object.keys(ActionParams);
+
 const ActionSchema = z.object({
-  type: z.string().min(1),
+  type: z.enum(ALLOWEDActionTypes),
   params: z.record(z.any()).optional().default({}),
+}).superRefine((action, ctx) => {
+  const paramSchema = ActionParams[action.type];
+  if (!paramSchema) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Unknown action type: ${action.type}` });
+    return;
+  }
+  const result = paramSchema.safeParse(action.params || {});
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Action '${action.type}' param error: ${issue.message}` });
+    }
+  } else {
+    action.params = result.data;
+  }
 });
 
 const LLMOutputSchema = z.object({
   intent: z.string().optional().default('unknown'),
   requires_automation: z.boolean().optional().default(false),
-  actions: z.array(ActionSchema).optional().default([]),
-  llm_queries: z.array(z.string()).optional().default([]),
-  response: z.string().optional().default(''),
-}).passthrough();
+  actions: z.array(ActionSchema).max(10).optional().default([]),
+  llm_queries: z.array(z.string()).max(5).optional().default([]),
+  response: z.string().max(2000).optional().default(''),
+}).strict();
 
 const SYSTEM_PROMPT = `You are JARVIS, an AI assistant for Android that helps users automate tasks on their phone.
 
@@ -33,7 +71,7 @@ Respond with a JSON plan:
   "requires_automation": true/false,
   "actions": [
     {
-      "type": "open_app|tap|swipe|type|read_screen|wait|...",
+      "type": "open_app|tap|swipe|type|read_screen|wait|go_back|go_home|send_sms|share_text|bluetooth_on|bluetooth_off|bluetooth_toggle|wifi_on|wifi_off|wifi_toggle|battery_status|calendar_today|calendar_search",
       "params": {}
     }
   ],
@@ -44,7 +82,8 @@ Respond with a JSON plan:
 ## Rules
 - Keep actions minimal and efficient
 - If unsure, ask for clarification
-- Use memory to personalize responses`;
+- Use memory to personalize responses
+- Only use action types from the list above`;
 
 export class CommandRouter {
   constructor(llmOrchestrator, memoryManager) {
@@ -110,11 +149,11 @@ export class CommandRouter {
         if (validated.success) {
           parsed = validated.data;
         } else {
-          console.warn('LLM output validation failed:', validated.error.errors);
+          console.warn('LLM output validation failed:', validated.error.errors.map(e => e.message).join('; '));
           parsed = {
-            intent: raw.intent || 'unknown',
+            intent: 'unknown',
             response: raw.response || content,
-            actions: Array.isArray(raw.actions) ? raw.actions : [],
+            actions: [],
             requires_automation: false,
           };
         }
@@ -123,23 +162,9 @@ export class CommandRouter {
       parsed = { intent: 'direct_response', response: result.content, actions: [] };
     }
 
-    // STEP 5: Validate each action in the plan
-    const validActions = [];
-    for (const action of parsed.actions) {
-      if (!action.type || typeof action.type !== 'string') {
-        console.warn('Dropping action with missing type:', action);
-        continue;
-      }
-      validActions.push({
-        type: action.type,
-        params: action.params && typeof action.params === 'object' ? action.params : {},
-      });
-    }
-    parsed.actions = validActions;
-
     session.addMessage('assistant', parsed.response || '');
 
-    // STEP 6: Store conversation memory
+    // STEP 5: Store conversation memory
     if (this.memory && userId) {
       try {
         await this.memory.store(userId, `User: ${command}\nJARVIS: ${parsed.response}`, 'conversation');
