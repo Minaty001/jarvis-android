@@ -227,6 +227,10 @@ class LiveKitWakeWordEngine(
         Log.i(TAG, "Wake-word monitoring stopped")
     }
 
+    fun stop() {
+        stopMonitoring()
+    }
+
     fun release() {
         stopMonitoring()
         detector.release()
