@@ -1,25 +1,23 @@
-export function authMiddleware(deviceTokens) {
-  return (req, res, next) => {
+export function createAuthMiddleware(tokenService) {
+  return async (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ status: 'error', message: 'Missing or invalid Authorization header' });
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "Missing or invalid Authorization header" });
     }
 
     const token = authHeader.slice(7);
-    let foundDeviceId = null;
+    const deviceId = req.headers["x-device-id"];
 
-    for (const [deviceId, data] of deviceTokens.entries()) {
-      if (data.token === token) {
-        foundDeviceId = deviceId;
-        break;
-      }
+    if (!deviceId) {
+      return res.status(401).json({ error: "Missing X-Device-ID header" });
     }
 
-    if (!foundDeviceId) {
-      return res.status(401).json({ status: 'error', message: 'Invalid token' });
+    const isValid = await tokenService.validateToken(deviceId, token);
+    if (!isValid) {
+      return res.status(401).json({ error: "Invalid or expired token" });
     }
 
-    req.authenticatedDeviceId = foundDeviceId;
+    req.authenticatedDeviceId = deviceId;
     next();
   };
 }

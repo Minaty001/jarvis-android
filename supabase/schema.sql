@@ -4,6 +4,38 @@
 -- Enable pgvector
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- ==================== DEVICES ====================
+CREATE TABLE IF NOT EXISTS devices (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  device_id TEXT UNIQUE NOT NULL,
+  device_name TEXT,
+  device_model TEXT,
+  os_version TEXT,
+  enrollment_secret TEXT,
+  enrolled_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ==================== DEVICE SESSIONS ====================
+CREATE TABLE IF NOT EXISTS device_sessions (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
+  access_token_hash TEXT NOT NULL,
+  refresh_token_hash TEXT NOT NULL,
+  access_expires_at TIMESTAMPTZ NOT NULL,
+  refresh_expires_at TIMESTAMPTZ NOT NULL,
+  device_name TEXT,
+  device_model TEXT,
+  os_version TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_used_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_sessions_device ON device_sessions(device_id);
+CREATE INDEX idx_sessions_access_hash ON device_sessions(access_token_hash);
+CREATE INDEX idx_sessions_refresh_hash ON device_sessions(refresh_token_hash);
+
 -- ==================== USERS ====================
 CREATE TABLE IF NOT EXISTS users (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -11,26 +43,6 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   last_seen TIMESTAMPTZ DEFAULT NOW()
 );
-
--- ==================== DEVICE SESSIONS ====================
-CREATE TABLE IF NOT EXISTS device_sessions (
-  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  device_id TEXT NOT NULL REFERENCES users(device_id) ON DELETE CASCADE,
-  access_token_hash TEXT NOT NULL,
-  refresh_token_hash TEXT NOT NULL,
-  access_expires_at TIMESTAMPTZ NOT NULL,
-  refresh_expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  device_name TEXT,
-  device_model TEXT,
-  os_version TEXT
-);
-
-CREATE INDEX idx_sessions_device ON device_sessions(device_id);
-CREATE INDEX idx_sessions_access_hash ON device_sessions(access_token_hash);
-CREATE INDEX idx_sessions_refresh_hash ON device_sessions(refresh_token_hash);
 
 -- ==================== MEMORIES ====================
 CREATE TABLE IF NOT EXISTS memories (
