@@ -10,33 +10,29 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Log
 
-/**
- * Wraps Android's built-in SpeechRecognizer.
- * All SpeechRecognizer operations MUST happen on the main thread.
- */
-class NativeSttManager(private val context: Context) {
+class NativeSttManager(private val context: Context) : SttEngine {
     companion object {
         private const val TAG = "NativeSttManager"
-        // Errors that are safe to auto-retry (user just didn't speak)
         private val RETRYABLE_ERRORS = setOf(
             SpeechRecognizer.ERROR_NO_MATCH,
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT
         )
     }
 
-    // All access must be on main thread
     private var speechRecognizer: SpeechRecognizer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    private var isListening = false   // accessed only from main thread
+    private var _isListening = false
+    override val isListening: Boolean get() = _isListening
+
+    override val isAvailable: Boolean
+        get() = SpeechRecognizer.isRecognitionAvailable(context)
+
     private var currentOnResult: ((String) -> Unit)? = null
     private var currentOnPartial: ((String) -> Unit)? = null
     private var currentOnError: ((String) -> Unit)? = null
 
-    val isAvailable: Boolean
-        get() = SpeechRecognizer.isRecognitionAvailable(context)
-
-    fun initialize(onReady: () -> Unit = {}, onError: (String) -> Unit = {}) {
+    override fun initialize(onReady: () -> Unit, onError: (String) -> Unit) {
         if (!isAvailable) {
             Log.w(TAG, "Speech recognition unavailable on this device")
             onError("Speech recognition unavailable on this device")
@@ -57,7 +53,7 @@ class NativeSttManager(private val context: Context) {
         }
 
         mainHandler.post {
-            if (isListening) return@post
+            if (_isListening) return@post
 
             currentOnResult = onResult
             currentOnPartial = onPartialResult
@@ -69,8 +65,23 @@ class NativeSttManager(private val context: Context) {
         return true
     }
 
+    override fun listen(
+        onResult: (SttResult) -> Unit,
+        onPartialResult: (SttResult) -> Unit,
+        onError: (String) -> Unit
+    ): Boolean {
+        return startListening(
+            onResult = { text -> onResult(SttResult(text)) },
+            onPartialResult = { text -> onPartialResult(SttResult(text, isPartial = true)) },
+            onError = onError
+        )
+    }
+
+    override fun cancel() {
+        stopListening()
+    }
+
     private fun createAndStartRecognizer() {
-        // Must be called from main thread
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context).apply {
             setRecognitionListener(buildListener())
         }
@@ -84,11 +95,11 @@ class NativeSttManager(private val context: Context) {
 
         try {
             speechRecognizer?.startListening(intent)
-            isListening = true
+            _isListening = true
             Log.d(TAG, "SpeechRecognizer started")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start listening", e)
-            isListening = false
+            _isListening = false
             currentOnError?.invoke(e.message ?: "Failed to start speech recognition")
         }
     }
@@ -106,12 +117,12 @@ class NativeSttManager(private val context: Context) {
         override fun onBufferReceived(buffer: ByteArray?) {}
 
         override fun onEndOfSpeech() {
-            isListening = false
+            _isListening = false
             Log.d(TAG, "End of speech")
         }
 
         override fun onError(error: Int) {
-            isListening = false
+            _isListening = false
             val message = when (error) {
                 SpeechRecognizer.ERROR_NO_MATCH         -> "No speech detected — try again"
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT   -> "Listening timed out"
@@ -125,17 +136,11 @@ class NativeSttManager(private val context: Context) {
                 else -> "Speech recognition error (code $error)"
             }
             Log.e(TAG, "SpeechRecognizer error: $message")
-
-            if (error in RETRYABLE_ERRORS) {
-                // Silently notify caller without blocking retry
-                currentOnError?.invoke(message)
-            } else {
-                currentOnError?.invoke(message)
-            }
+            currentOnError?.invoke(message)
         }
 
         override fun onResults(results: Bundle?) {
-            isListening = false
+            _isListening = false
             val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
             if (!matches.isNullOrEmpty()) {
                 val text = matches[0]
@@ -158,7 +163,7 @@ class NativeSttManager(private val context: Context) {
 
     fun stopListening() {
         mainHandler.post {
-            isListening = false
+            _isListening = false
             speechRecognizer?.stopListening()
         }
     }
@@ -171,11 +176,11 @@ class NativeSttManager(private val context: Context) {
             Log.w(TAG, "Error destroying SpeechRecognizer: ${e.message}")
         } finally {
             speechRecognizer = null
-            isListening = false
+            _isListening = false
         }
     }
 
-    fun release() {
+    override fun release() {
         mainHandler.post {
             destroyRecognizer()
             currentOnResult = null

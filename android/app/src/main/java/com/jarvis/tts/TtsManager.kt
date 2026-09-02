@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
 import java.util.UUID
 
-class TtsManager(private val context: Context) {
+class TtsManager(private val context: Context) : TtsEngine {
     companion object {
         private const val TAG = "TtsManager"
         private const val MAX_CHUNK_SIZE = 4000
@@ -21,12 +21,16 @@ class TtsManager(private val context: Context) {
     private val pendingQueue = mutableListOf<String>()
 
     private val _isReady = MutableStateFlow(false)
-    val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
+    override val isReady: StateFlow<Boolean> = _isReady.asStateFlow()
 
     private val _isSpeaking = MutableStateFlow(false)
-    val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
+    override val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
-    fun initialize(onReady: () -> Unit = {}) {
+    private val _state = MutableStateFlow(TtsState.UNINITIALIZED)
+    override val state: StateFlow<TtsState> = _state.asStateFlow()
+
+    override fun initialize(onReady: () -> Unit) {
+        _state.value = TtsState.LOADING
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val langResult = tts?.setLanguage(Locale.US)
@@ -61,6 +65,7 @@ class TtsManager(private val context: Context) {
                 })
 
                 _isReady.value = true
+                _state.value = TtsState.READY
                 Log.d(TAG, "TTS initialized successfully")
                 onReady()
 
@@ -75,7 +80,7 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    fun speak(text: String) {
+    override fun speak(text: String) {
         if (text.isBlank()) return
         if (!_isReady.value) {
             Log.w(TAG, "TTS not ready, queuing: $text")
@@ -99,17 +104,19 @@ class TtsManager(private val context: Context) {
         }
     }
 
-    fun stop() {
+    override fun stop() {
         tts?.stop()
         _isSpeaking.value = false
+        _state.value = TtsState.READY
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         stop()
         pendingQueue.clear()
         tts?.shutdown()
         tts = null
         _isReady.value = false
+        _state.value = TtsState.UNINITIALIZED
     }
 
     /**
