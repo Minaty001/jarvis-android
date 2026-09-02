@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 const CommandSchema = z.object({
   command: z.string().min(1).max(2000),
-  context: z.object({}).optional().default({}),
+  context: z.record(z.unknown()).optional().default({}),
   userId: z.string().optional(),
 });
 
@@ -15,7 +15,7 @@ export function commandRoutes(commandRouter) {
       const { command, context, userId } = CommandSchema.parse(req.body);
       const deviceId = req.headers['x-device-id'] || 'rest-client';
       const session = req.app.get('sessionManager').create(deviceId);
-      const result = await commandRouter.route(command, session, userId);
+      const result = await commandRouter.route(command, session, userId || deviceId, context);
       res.json({ status: 'success', result });
     } catch (err) {
       if (err instanceof z.ZodError) {

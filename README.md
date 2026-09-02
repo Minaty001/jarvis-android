@@ -1,13 +1,13 @@
 # JARVIS AI — Android Voice Assistant
 
-A lightweight, AGI-powered Android voice assistant with full device automation, running on free-tier infrastructure.
+A lightweight, AI-powered Android voice assistant with on-device ONNX wake word detection, full device automation, and cloud LLM backend.
 
 ## Architecture
 
 ```
 Android App (Kotlin/Compose)
-    ├── Voice: Wake Word → STVosk → Backend → TTS
-    ├── Automation: AccessibilityService + AppController
+    ├── Voice: ONNX 3-Model Wake Word → SpeechRecognizer STT → Backend → TTS
+    ├── Automation: AccessibilityService + AppController + ActionValidator
     ├── Memory: Room DB (local) + Supabase (cloud)
     ├── Skills: ActionRecorder + SkillExecutor
     ├── Connectivity: Bluetooth, WiFi, Battery
@@ -16,8 +16,9 @@ Android App (Kotlin/Compose)
 
 Backend (Node.js/Express)
     ├── LLM: Groq → OpenRouter → NVIDIA NIM (fallback chain)
-    ├── Memory: Supabase pgvector (cosine similarity)
+    ├── Memory: Supabase pgvector (cosine similarity) / keyword fallback
     ├── Skills: 3-tier matching (exact → semantic → LLM)
+    ├── Auth: JWT device registration + token refresh
     ├── Rate Limiting: 30 req/min per IP
     └── WebSocket: Real-time command streaming
 ```
@@ -25,22 +26,32 @@ Backend (Node.js/Express)
 ## Features
 
 ### Voice
-- Wake word detection (openwakeword)
-- Double clap activation
-- Offline STT (Vosk)
-- Text-to-speech (Android TTS)
+- **Wake word detection**: ONNX 3-model pipeline (melspectrogram + embedding + classifier) — fully offline, zero cloud dependency
+- **Double clap activation**: Audio RMS-based clap detection
+- **STT**: Android SpeechRecognizer (cloud-dependent system service)
+- **TTS**: Android TextToSpeech engine
 
 ### Automation
-- Open/close any app
+- Open/close any app (70+ aliases)
 - Tap, swipe, type via AccessibilityService
-- Read screen content
+- Read screen content (password-masked)
 - YouTube/Chrome/WhatsApp sequences
+- Action validation with risk levels (AUTOMATIC/LOW/MEDIUM/HIGH/FORBIDDEN)
+- Privacy filter for sensitive screen content
 
 ### Memory & Learning
-- pgvector cosine similarity search
+- pgvector cosine similarity search (when NVIDIA NIM available)
+- Keyword fallback when embeddings unavailable
 - Local Room DB cache + background sync
 - 3-tier skill matching
 - Record & execute learned skills
+
+### Security
+- JWT device registration + token refresh
+- EncryptedSharedPreferences for token storage
+- ActionValidator with confirmation for high-risk actions
+- PrivacyFilter blocks sensitive screen content from LLM
+- Feature-gated permissions (on-demand, not bulk)
 
 ### Connectivity
 - Bluetooth toggle, discovery, pairing
@@ -65,7 +76,7 @@ Backend (Node.js/Express)
 ```bash
 cd backend
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env with your API keys (GROQ_API_KEY, OPENROUTER_API_KEY, etc.)
 npm install
 npm start
 ```
@@ -78,14 +89,18 @@ Server runs on `http://localhost:10000`
 2. Sync Gradle
 3. Run on device or emulator
 
+**Note**: The ONNX wake word models (`melspectrogram.onnx`, `embedding_model.onnx`, `hey_jarvis.onnx`) are included in `android/app/src/main/assets/wakeword/` and are loaded on-device at startup.
+
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | /health | Server status + LLM providers |
+| POST | /api/v1/auth/token | Device registration (returns JWT) |
+| POST | /api/v1/auth/refresh | Token refresh |
 | POST | /command | Send voice command |
-| WS | /ws | WebSocket command stream |
-| GET | /memory/search | Search memories (pgvector) |
+| WS | /ws?device=ID | WebSocket command stream |
+| GET | /memory/search | Search memories (pgvector/keyword) |
 | GET | /memory/recent | Recent memories |
 | POST | /memory/store | Store a memory |
 | DELETE | /memory/:id | Delete a memory |
@@ -110,40 +125,60 @@ Run `supabase/schema.sql` in Supabase SQL Editor to create:
 
 ## Tech Stack
 
-- **Android**: Kotlin, Jetpack Compose, Room, WorkManager
+- **Android**: Kotlin, Jetpack Compose, Room, WorkManager, ONNX Runtime Mobile
 - **Backend**: Node.js, Express, WebSocket, Zod
 - **Database**: Supabase (PostgreSQL + pgvector)
 - **LLM**: Groq, OpenRouter, NVIDIA NIM
-- **Voice**: openwakeword, Vosk, Android TTS
+- **Wake Word**: ONNX 3-model pipeline (offline, on-device)
+- **Auth**: JWT with encrypted local storage
 
 ## Project Structure
 
 ```
 project1/
-├── android/                    # Android app (45 Kotlin files)
-│   └── app/src/main/java/com/jarvis/
-│       ├── automation/         # AccessibilityService, AppController, SkillExecutor
-│       ├── audio/              # ClapDetector
-│       ├── backend/            # WebSocketClient, ApiClient
-│       ├── calendar/           # CalendarManager
-│       ├── connectivity/       # BluetoothController, WifiController, BatteryMonitor
-│       ├── contacts/           # ContactManager
-│       ├── files/              # MediaStoreManager
-│       ├── media/              # MediaNotificationListener
-│       ├── memory/             # Room DB, SyncWorker
-│       ├── messaging/          # SmsController
-│       ├── navigation/         # NavigationController
-│       ├── phone/              # PhoneController
-│       ├── reminders/          # ReminderScheduler
-│       ├── sharing/            # ShareManager
-│       ├── stt/                # VoskManager
-│       ├── tts/                # TtsManager
-│       ├── ui/                 # Compose screens + theme
-│       └── wakeword/           # WakeWordManager
-├── backend/                    # Node.js backend (11 JS files)
+├── android/                    # Android app
+│   └── app/src/main/
+│       ├── assets/wakeword/    # ONNX wake word models
+│       ├── java/com/jarvis/
+│       │   ├── automation/     # AccessibilityService, ActionValidator, SkillExecutor
+│       │   ├── audio/          # ClapDetector
+│       │   ├── backend/        # WebSocketClient, ApiClient, AuthTokenManager, ConnectionManager
+│       │   ├── calendar/       # CalendarManager
+│       │   ├── connectivity/   # BluetoothController, WifiController, BatteryMonitor
+│       │   ├── contacts/       # ContactManager
+│       │   ├── files/          # MediaStoreManager
+│       │   ├── media/          # MediaNotificationListener
+│       │   ├── memory/         # Room DB, SyncWorker
+│       │   ├── messaging/      # SmsController
+│       │   ├── navigation/     # NavigationController
+│       │   ├── permissions/    # PermissionManager (feature-gated)
+│       │   ├── phone/          # PhoneController
+│       │   ├── reminders/      # ReminderScheduler
+│       │   ├── sharing/        # ShareManager
+│       │   ├── stt/            # NativeSttManager
+│       │   ├── tts/            # TtsManager
+│       │   ├── ui/             # Compose screens + theme
+│       │   └── wakeword/       # ONNX wake word pipeline (7 files)
+│       └── res/                # XML resources
+├── backend/                    # Node.js backend
 │   └── src/
 │       ├── core/               # LLM, CommandRouter, MemoryManager, SessionManager
 │       ├── middleware/         # Sanitization
-│       └── routes/             # REST endpoints (12 total)
+│       └── routes/             # REST endpoints
 └── supabase/                   # Database schema
 ```
+
+## Wake Word Details
+
+The wake word system uses a 3-stage ONNX neural pipeline:
+
+1. **Mel Spectrogram** (`melspectrogram.onnx`): Converts raw 16kHz PCM audio to mel spectrogram features
+2. **Embedding Model** (`embedding_model.onnx`): Generates 96-dimensional embeddings from spectrogram windows
+3. **Classifier** (`hey_jarvis.onnx`): Custom-trained conv-attention classifier for "Hey Jarvis" detection
+
+Features:
+- **Temporal Gate**: Requires 5/7 consecutive windows above confidence threshold
+- **Adaptive Noise Gate**: Auto-calibrates noise floor, skips inference for quiet audio
+- **Cooldown**: 4-second debounce after confirmed detection
+- **Fully offline**: Zero cloud dependency for wake word detection
+- **Configurable sensitivity**: Low/Medium/High (0.55-0.92 threshold range)

@@ -13,11 +13,15 @@ android {
         applicationId = "com.jarvis"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         buildConfigField("String", "BACKEND_WS_URL", "\"wss://jarvis-android.onrender.com/ws\"")
         buildConfigField("String", "BACKEND_API_URL", "\"https://jarvis-android.onrender.com\"")
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -71,6 +75,10 @@ android {
         compose = true
         buildConfig = true
     }
+
+    aaptOptions {
+        noCompress("onnx")
+    }
 }
 
 dependencies {
@@ -86,7 +94,12 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Wake word: uses Android SpeechRecognizer loop (no external library needed)
+    // ONNX Runtime Mobile — runs offline wake-word models (melspectrogram, embedding_model, hey_jarvis)
+    // entirely on-device with zero cloud dependencies.
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
+
+    // Encrypted storage for auth tokens
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Reminders: WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.1")

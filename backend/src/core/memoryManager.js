@@ -22,6 +22,11 @@ export class MemoryManager {
     if (!this.available) return null;
     const dbUserId = await this._getUserId(userId);
 
+    const embedding = await this._getEmbedding(content);
+    if (!embedding) {
+      console.warn('No embedding provider available — storing without embedding');
+    }
+
     const { data, error } = await this.supabase
       .from('memories')
       .insert({
@@ -29,7 +34,7 @@ export class MemoryManager {
         content,
         memory_type: memoryType,
         importance,
-        embedding: await this._getEmbedding(content),
+        embedding,
       })
       .select()
       .single();
@@ -54,6 +59,11 @@ export class MemoryManager {
     const dbUserId = await this._getUserId(userId);
     const embedding = await this._getEmbedding(query);
 
+    if (!embedding) {
+      console.warn('No embedding provider — falling back to keyword search');
+      return this._searchLexical(dbUserId, query, limit);
+    }
+
     const { data, error } = await this.supabase.rpc('match_memories', {
       query_embedding: embedding,
       match_threshold: CONFIG.memorySimilarityThreshold,
@@ -63,6 +73,22 @@ export class MemoryManager {
 
     if (error) {
       console.error('Memory search error:', error.message);
+      return [];
+    }
+    return data || [];
+  }
+
+  async _searchLexical(dbUserId, query, limit) {
+    const { data, error } = await this.supabase
+      .from('memories')
+      .select('id, content, memory_type, importance, timestamp')
+      .eq('user_id', dbUserId)
+      .ilike('content', `%${query}%`)
+      .order('timestamp', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.error('Lexical search error:', error.message);
       return [];
     }
     return data || [];
@@ -109,8 +135,6 @@ export class MemoryManager {
     }
   }
 
-  // ==================== SKILLS ====================
-
   async storeSkill(userId, name, triggerPattern, actionSequence, examples = []) {
     if (!this.available) return null;
 
@@ -138,7 +162,6 @@ export class MemoryManager {
     if (!this.available) return null;
     const dbUserId = await this._getUserId(userId);
 
-    // Tier 1: Exact substring match on examples (fast path)
     const { data: allSkills, error: fetchError } = await this.supabase
       .from('skills')
       .select('*')
@@ -155,25 +178,25 @@ export class MemoryManager {
       }
     }
 
-    // Tier 2: Semantic similarity search via pgvector
-    try {
-      const embedding = await this._getEmbedding(command);
-      const { data: similar, error: matchError } = await this.supabase.rpc('match_skills', {
-        query_embedding: embedding,
-        match_threshold: 0.65,
-        match_count: 3,
-        p_user_id: dbUserId,
-      });
+    const embedding = await this._getEmbedding(command);
+    if (embedding) {
+      try {
+        const { data: similar, error: matchError } = await this.supabase.rpc('match_skills', {
+          query_embedding: embedding,
+          match_threshold: 0.65,
+          match_count: 3,
+          p_user_id: dbUserId,
+        });
 
-      if (!matchError && similar && similar.length > 0) {
-        await this._incrementSkillUsage(similar[0].id);
-        return { ...similar[0], matchType: 'semantic' };
+        if (!matchError && similar && similar.length > 0) {
+          await this._incrementSkillUsage(similar[0].id);
+          return { ...similar[0], matchType: 'semantic' };
+        }
+      } catch (err) {
+        console.error('Semantic skill match failed:', err.message);
       }
-    } catch (err) {
-      console.error('Semantic skill match failed:', err.message);
     }
 
-    // Tier 3: No match → caller falls through to LLM
     return null;
   }
 
@@ -221,8 +244,6 @@ export class MemoryManager {
     return data.id;
   }
 
-  // ==================== EMBEDDINGS ====================
-
   async _getEmbedding(text) {
     if (CONFIG.nvidiaNimApiKey) {
       try {
@@ -248,24 +269,13 @@ export class MemoryManager {
         console.error('Embedding API failed:', err.message);
       }
     }
-
-    return this._dummyEmbedding(text);
-  }
-
-  _dummyEmbedding(text) {
-    const hash = Array.from(text).reduce((acc, c) => ((acc << 5) - acc + c.charCodeAt(0)) | 0, 0);
-    const embedding = new Array(768).fill(0).map((_, i) => {
-      const seed = (hash + i * 31) & 0x7fffffff;
-      return ((seed / 0x7fffffff) * 2 - 1) * 0.1;
-    });
-    const norm = Math.sqrt(embedding.reduce((s, v) => s + v * v, 0));
-    return embedding.map(v => v / norm);
+    return null;
   }
 
   getStatus() {
     return {
       available: this.available,
-      provider: CONFIG.nvidiaNimApiKey ? 'nvidia-nim' : 'dummy',
+      provider: CONFIG.nvidiaNimApiKey ? 'nvidia-nim' : 'none',
     };
   }
 }

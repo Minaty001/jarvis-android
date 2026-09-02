@@ -9,8 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
 
     <!-- Contacts & Phone -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -31,10 +31,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
-    <!-- Phase 7: SMS -->
+    <!-- SMS -->
     <uses-permission android:name="android.permission.SEND_SMS" />
 
-    <!-- Phase 7: Bluetooth -->
+    <!-- Bluetooth -->
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
@@ -43,11 +43,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
 
-    <!-- Phase 7: WiFi -->
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-
-    <!-- Phase 7: Calendar -->
+    <!-- Calendar -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
 
     <queries>
@@ -63,7 +59,8 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Jarvis">
+        android:theme="@style/Theme.Jarvis"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"

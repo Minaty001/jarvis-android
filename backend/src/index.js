@@ -19,11 +19,17 @@ const memoryManager = new MemoryManager();
 const commandRouter = new CommandRouter(llm, memoryManager);
 
 const app = express();
-app.use(cors());
+
+const allowedOrigins = (CONFIG.allowedOrigins || '').split(',').filter(Boolean);
+app.use(cors({
+  origin: allowedOrigins.length > 0 ? allowedOrigins : '*',
+  credentials: true,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(sanitizeMiddleware);
 app.set('sessionManager', sessionManager);
 
+const deviceTokens = new Map();
 const requestCounts = new Map();
 const RATE_LIMIT_WINDOW = 60000;
 const RATE_LIMIT_MAX = 30;
@@ -58,6 +64,58 @@ app.use((req, res, next) => {
     }
   });
   next();
+});
+
+function generateToken() {
+  return Array.from({ length: 64 }, () => 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random() * 62)]).join('');
+}
+
+app.post('/api/v1/auth/token', (req, res) => {
+  const { device_id, device_name, device_model, os_version } = req.body;
+  if (!device_id) {
+    return res.status(400).json({ error: 'device_id is required' });
+  }
+  const token = generateToken();
+  const refreshToken = generateToken();
+  const expiresIn = 86400;
+  deviceTokens.set(device_id, { token, refreshToken, device_name, device_model, os_version, createdAt: Date.now() });
+  res.json({
+    access_token: token,
+    refresh_token: refreshToken,
+    expires_in: expiresIn,
+    device_id,
+    trusted: false,
+  });
+});
+
+app.post('/api/v1/auth/refresh', (req, res) => {
+  const { refresh_token } = req.body;
+  if (!refresh_token) {
+    return res.status(400).json({ error: 'refresh_token is required' });
+  }
+  let foundDeviceId = null;
+  for (const [deviceId, data] of deviceTokens.entries()) {
+    if (data.refreshToken === refresh_token) {
+      foundDeviceId = deviceId;
+      break;
+    }
+  }
+  if (!foundDeviceId) {
+    return res.status(401).json({ error: 'Invalid refresh token' });
+  }
+  const newToken = generateToken();
+  const newRefresh = generateToken();
+  const entry = deviceTokens.get(foundDeviceId);
+  entry.token = newToken;
+  entry.refreshToken = newRefresh;
+  deviceTokens.set(foundDeviceId, entry);
+  res.json({
+    access_token: newToken,
+    refresh_token: newRefresh,
+    expires_in: 86400,
+    device_id: foundDeviceId,
+    trusted: false,
+  });
 });
 
 app.use(healthRoutes(llm, sessionManager, memoryManager));
@@ -95,19 +153,10 @@ wss.on('connection', (ws, req) => {
       const msg = JSON.parse(raw.toString());
 
       if (msg.type === 'command') {
-        const result = await commandRouter.route(msg.command, session, msg.userId);
+        const result = await commandRouter.route(msg.command, session, msg.userId || deviceId);
         ws.send(JSON.stringify({ type: 'response', data: result }));
       } else if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-      } else if (msg.type === 'audio') {
-        ws.send(JSON.stringify({
-          type: 'response',
-          data: {
-            intent: 'audio_received',
-            response: 'Audio processing not yet implemented',
-            actions: [],
-          },
-        }));
       }
     } catch (err) {
       console.error('WS message error:', err.message);

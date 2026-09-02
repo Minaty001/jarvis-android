@@ -16,6 +16,16 @@ class SkillExecutor(private val automationController: AutomationController) {
             val type = action.getString("type")
             val params = action.optJSONObject("params") ?: JSONObject()
 
+            val validation = ActionValidator.validate(action)
+            if (!validation.isValid) {
+                Log.w(TAG, "Action validation failed: ${validation.reason}")
+                return false
+            }
+
+            if (ActionValidator.requiresConfirmation(action)) {
+                Log.i(TAG, "Action requires confirmation: $type (risk: ${ActionValidator.getRiskLevel(action)})")
+            }
+
             val success = when (type) {
                 "open_app" -> {
                     val pkg = params.optString("package", "")
