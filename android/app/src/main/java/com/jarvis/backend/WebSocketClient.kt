@@ -12,10 +12,12 @@ class WebSocketClient(
     private val baseUrl: String,
     private val onMessageReceived: ((String) -> Unit)? = null,
     private val onConnected: (() -> Unit)? = null,
-    private val onDisconnected: (() -> Unit)? = null
+    private val onDisconnected: ((code: Int) -> Unit)? = null,
+    private val onAuthRejected: (() -> Unit)? = null
 ) {
     companion object {
         private const val TAG = "WebSocketClient"
+        const val CLOSE_AUTH_REJECTED = 4001
     }
 
     private var webSocket: WebSocket? = null
@@ -53,19 +55,26 @@ class WebSocketClient(
                 Log.i(TAG, "WebSocket closing: $reason ($code)")
                 webSocket.close(1000, null)
                 isConnected = false
-                onDisconnected?.invoke()
+                if (code == CLOSE_AUTH_REJECTED) {
+                    Log.w(TAG, "Auth rejected by server (4001)")
+                    onAuthRejected?.invoke()
+                }
+                onDisconnected?.invoke(code)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: $reason ($code)")
                 isConnected = false
-                onDisconnected?.invoke()
+                if (code == CLOSE_AUTH_REJECTED) {
+                    onAuthRejected?.invoke()
+                }
+                onDisconnected?.invoke(code)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure: ${t.message}")
                 isConnected = false
-                onDisconnected?.invoke()
+                onDisconnected?.invoke(-1)
             }
         })
     }

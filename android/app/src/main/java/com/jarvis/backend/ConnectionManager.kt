@@ -48,6 +48,11 @@ class ConnectionManager(
         onReconnect = listener
     }
 
+    fun onConnecting() {
+        _state.value = ConnectionState.CONNECTING
+        onStateChange?.invoke(ConnectionState.CONNECTING)
+    }
+
     fun onConnected() {
         _state.value = ConnectionState.CONNECTED
         reconnectAttempts = 0
@@ -67,9 +72,13 @@ class ConnectionManager(
         Log.w(TAG, "Connection state: AUTH_FAILED")
     }
 
-    fun startReconnect() {
+    fun startReconnect(onReconnectAction: (() -> Unit)? = null) {
         if (reconnectJob?.isActive == true) return
         if (_state.value == ConnectionState.STOPPED) return
+        if (reconnectAttempts >= maxReconnectAttempts) {
+            Log.w(TAG, "Max reconnect attempts reached")
+            return
+        }
 
         _state.value = ConnectionState.RECONNECTING
         onStateChange?.invoke(ConnectionState.RECONNECTING)
@@ -78,7 +87,7 @@ class ConnectionManager(
             val delayMs = baseReconnectDelay * (1L shl reconnectAttempts.coerceAtMost(5))
             delay(delayMs)
             reconnectAttempts++
-            onReconnect?.invoke()
+            onReconnectAction?.invoke() ?: onReconnect?.invoke()
         }
     }
 

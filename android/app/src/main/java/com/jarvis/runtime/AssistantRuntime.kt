@@ -157,9 +157,35 @@ class AssistantRuntime(private val context: Context) {
             baseUrl = Config.BACKEND_WS_URL,
             onMessageReceived = { msg -> handleWsMessage(msg) },
             onConnected = { connectionManager.onConnected() },
-            onDisconnected = { connectionManager.onDisconnected() }
+            onDisconnected = { code -> handleWsDisconnected(code) },
+            onAuthRejected = { handleWsAuthRejected() }
         )
+        connectionManager.onConnecting()
         wsClient!!.connect(token, deviceId)
+    }
+
+    private fun handleWsDisconnected(code: Int) {
+        connectionManager.onDisconnected()
+        if (code == WebSocketClient.CLOSE_AUTH_REJECTED) return
+        connectionManager.startReconnect { connectWebSocket() }
+    }
+
+    private fun handleWsAuthRejected() {
+        Log.w(TAG, "WS auth rejected — attempting one refresh")
+        connectionManager.onAuthFailed()
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        scope.launch {
+            authManager.refreshAccessToken()
+            val state = authManager.currentState
+            if (state is AuthState.Authenticated) {
+                Log.i(TAG, "Refresh succeeded, reconnecting WS")
+                delay(500)
+                connectWebSocket()
+            } else {
+                Log.e(TAG, "Refresh failed after auth reject, logout")
+                authManager.logout()
+            }
+        }
     }
 
     private fun handleWsMessage(msg: String) {
