@@ -110,5 +110,37 @@ export const ActionRegistry = {
     requiredPermissions: [],
     supportsBackground: false,
     supportsAutomation: true
+  },
+  credential_theft: {
+    name: "credential_theft",
+    risk: "forbidden",
+    requiresConfirmation: false,
+    requiredPermissions: [],
+    supportsBackground: false,
+    supportsAutomation: false
+  },
+  security_bypass: {
+    name: "security_bypass",
+    risk: "forbidden",
+    requiresConfirmation: false,
+    requiredPermissions: [],
+    supportsBackground: false,
+    supportsAutomation: false
+  },
+  financial_transfer: {
+    name: "financial_transfer",
+    risk: "forbidden",
+    requiresConfirmation: false,
+    requiredPermissions: [],
+    supportsBackground: false,
+    supportsAutomation: false
+  },
+  bank_transfer: {
+    name: "bank_transfer",
+    risk: "forbidden",
+    requiresConfirmation: false,
+    requiredPermissions: [],
+    supportsBackground: false,
+    supportsAutomation: false
   }
 };
