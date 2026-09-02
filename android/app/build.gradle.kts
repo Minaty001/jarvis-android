@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -24,6 +26,24 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val ksBase64 = System.getenv("KEYSTORE_BASE64")
+            val ksPassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+            val keyAlias = System.getenv("KEY_ALIAS") ?: ""
+            val keyPassword = System.getenv("KEY_PASSWORD") ?: ""
+            if (ksBase64 != null && ksBase64.isNotEmpty()) {
+                val ksFile = project.file("release.jks")
+                val bytes = Base64.getDecoder().decode(ksBase64)
+                ksFile.writeBytes(bytes)
+                storeFile = ksFile
+                storePassword = ksPassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             isMinifyEnabled = false
@@ -31,7 +51,12 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("debug")
+            val ksBase64 = System.getenv("KEYSTORE_BASE64")
+            signingConfig = if (ksBase64 != null && ksBase64.isNotEmpty()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -58,8 +83,8 @@ android {
     }
 
     lint {
-        checkReleaseBuilds = false
-        abortOnError = false
+        checkReleaseBuilds = true
+        abortOnError = true
     }
 
     compileOptions {
