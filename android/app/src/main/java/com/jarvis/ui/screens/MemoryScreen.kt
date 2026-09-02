@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.jarvis.backend.ApiClient
 import com.jarvis.backend.MemoryResult
 import com.jarvis.config.Config
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun MemoryScreen() {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val apiClient = remember { ApiClient() }
     var memories by remember { mutableStateOf(listOf<MemoryResult>()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -30,7 +32,7 @@ fun MemoryScreen() {
 
     LaunchedEffect(Unit) {
         isLoading = true
-        memories = apiClient.getRecentMemories(Config.DEVICE_ID, 20)
+        memories = apiClient.getRecentMemories(Config.getDeviceId(context), 20)
         isLoading = false
     }
 
@@ -49,11 +51,11 @@ fun MemoryScreen() {
                 searchQuery = it
                 if (it.isNotBlank()) {
                     scope.launch {
-                        memories = apiClient.searchMemory(Config.DEVICE_ID, it)
+                        memories = apiClient.searchMemory(Config.getDeviceId(context), it)
                     }
                 } else {
                     scope.launch {
-                        memories = apiClient.getRecentMemories(Config.DEVICE_ID, 20)
+                        memories = apiClient.getRecentMemories(Config.getDeviceId(context), 20)
                     }
                 }
             },

@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import com.jarvis.backend.ApiClient
 import com.jarvis.backend.MemoryStats
 import com.jarvis.config.Config
@@ -29,6 +30,7 @@ data class DataMetric(
 
 @Composable
 fun DataScreen() {
+    val context = LocalContext.current
     val apiClient = remember { ApiClient() }
     var stats by remember { mutableStateOf(MemoryStats(0, 0)) }
     var isLoading by remember { mutableStateOf(true) }
@@ -39,7 +41,7 @@ fun DataScreen() {
         isLoading = true
         hasError = false
         try {
-            stats = apiClient.getMemoryStats(Config.DEVICE_ID)
+            stats = apiClient.getMemoryStats(Config.getDeviceId(context))
         } catch (e: Exception) {
             hasError = true
         } finally {

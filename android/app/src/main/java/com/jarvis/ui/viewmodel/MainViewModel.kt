@@ -3,10 +3,10 @@ package com.jarvis.ui.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.jarvis.auth.AuthState
 import com.jarvis.automation.ConfirmationRequest
 import com.jarvis.automation.ConfirmationResult
 import com.jarvis.backend.ConnectionState
-import com.jarvis.backend.TokenState
 import com.jarvis.runtime.AssistantRuntime
 import com.jarvis.runtime.RuntimeState
 import com.jarvis.runtime.VoiceState
@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 
 data class MainUiState(
     val runtimeState: RuntimeState = RuntimeState.UNINITIALIZED,
-    val authState: TokenState = TokenState.NO_TOKEN,
+    val authState: AuthState = AuthState.Loading,
     val voiceState: VoiceState = VoiceState.OFF,
     val connectionState: ConnectionState = ConnectionState.DISCONNECTED,
     val isConnected: Boolean = false,
@@ -41,14 +41,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runtime.runtimeState,
                 runtime.authManager.state,
                 runtime.connectionManager.connectionState
-            ) { runtime, auth, connection ->
+            ) { runtimeState, authState, connState ->
                 _uiState.value.copy(
-                    runtimeState = runtime,
-                    authState = auth,
-                    connectionState = connection,
-                    isConnected = connection == ConnectionState.CONNECTED
+                    runtimeState = runtimeState,
+                    authState = authState,
+                    connectionState = connState,
+                    isConnected = connState == ConnectionState.CONNECTED
                 )
-            }.collect { _uiState.value = it }
+            }.collect { newState -> _uiState.value = newState }
         }
 
         viewModelScope.launch {

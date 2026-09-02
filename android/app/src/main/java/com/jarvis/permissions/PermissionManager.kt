@@ -14,8 +14,8 @@ object PermissionManager {
     const val CALL_PHONE = Manifest.permission.CALL_PHONE
     const val SMS = Manifest.permission.SEND_SMS
     const val CALENDAR = Manifest.permission.READ_CALENDAR
-    const val BT_CONNECT = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_CONNECT else null
-    const val BT_SCAN = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_SCAN else null
+    val BT_CONNECT = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_CONNECT else null
+    val BT_SCAN = if (Build.VERSION.SDK_INT >= 31) Manifest.permission.BLUETOOTH_SCAN else null
 
     fun isGranted(activity: Activity, permission: String): Boolean {
         if (permission.isBlank()) return true

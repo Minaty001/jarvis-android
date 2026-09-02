@@ -1,22 +1,22 @@
-# Current Architecture (as of commit 7f802f5)
+# Current Architecture (as of 01-auth-contract)
 
 ## Android App
 
 ```
-MainActivity (thin — observes state)
+MainActivity (thin — observes state, permission handling)
     ↓
-MainViewModel (bridges UI ↔ Runtime)
+MainViewModel (bridges UI ↔ Runtime, uses AuthState)
     ↓
 AssistantRuntime (singleton, owns everything)
-    ├── AuthManager (TokenState machine)
-    ├── ApiClient (ApiResult<T>, OkHttp Authenticator)
-    ├── VoiceRuntime (VoiceState machine + MicOwner)
-    ├── ConfirmationManager (Activity-independent, 30s timeout)
+    ├── AuthManager (AuthState sealed interface, persistent tokens)
+    ├── ApiClient (register/refresh, OkHttp)
+    ├── ConnectionManager (WS lifecycle, 7 states)
+    ├── WebSocketClient (token+deviceId, auth-first connect)
+    ├── ConfirmationManager (Activity-independent, 20s timeout → DENY)
     ├── ActionPolicyEngine (validate → permission → risk → confirm → execute)
     ├── SkillExecutor (ActionResult sealed interface)
     ├── AutomationController (awaiter patterns)
-    ├── ConnectionManager (WS lifecycle)
-    └── WebSocketClient (requires AUTHENTICATED)
+    └── WakeEngine / STT / TTS
 ```
 
 ## Auth Flow
@@ -24,77 +24,100 @@ AssistantRuntime (singleton, owns everything)
 ```
 App start
     ↓
-AssistantRuntime.getInstance()
+MainViewModel.initialize()
     ↓
-AuthManager → loadInitialState() from EncryptedSharedPreferences
+AssistantRuntime.bootstrapAndConnect()
     ↓
-┌─ Has token? ──── YES ──→ Is expired? ──── NO ──→ AUTHENTICATED
-│                         │
-│                         YES → Has refresh? ──── YES ──→ REFRESHING → refresh → AUTHENTICATED
+AuthManager.initialize()
+    ↓
+load tokens from EncryptedSharedPreferences
+    ↓
+┌─ Has tokens? ──→ Is access expired? ──→ No ──→ AUTHENTICATED
+│                          │
+│                          YES → Has refresh? ──→ Yes ──→ REFRESHING → refresh → AUTHENTICATED
 │                                        │
-│                                        NO → UNAUTHENTICATED
+│                                        NO → LOGGED_OUT
 │
-NO → REGISTERING → register → save tokens → AUTHENTICATED
+NO → LOGGED_OUT → registerDevice() → save tokens → AUTHENTICATED
     ↓
-WebSocket connects (only after AUTHENTICATED)
-```
-
-## Voice Pipeline
-
-```
-VoiceState.OFF
-    ↓ (user enables)
-VoiceState.READY
-    ↓ (startWakeListening)
-VoiceState.WAKE_LISTENING (MicOwner.WAKE)
-    ↓ (wake word detected)
-VoiceState.COMMAND_LISTENING (MicOwner.COMMAND)
-    ↓ (STT result)
-VoiceState.PROCESSING
-    ↓ (action executed)
-VoiceState.SPEAKING (MicOwner.TTS)
-    ↓ (TTS complete)
-VoiceState.WAKE_LISTENING (if wake enabled)
-```
-
-## Action Pipeline
-
-```
-LLM → strict schema (18 types) → ActionPlan
+AssistantRuntime.connectWebSocket()
     ↓
-ActionPolicyEngine.evaluatePlan()
-    ├─ validate(): ActionValidator (TypeAction enum + required params)
-    ├─ checkPermissions(): ACCESSIBILITY, SMS, etc.
-    └─ checkConfirmation(): HIGH risk → ConfirmationManager
+WebSocketClient.connect(token, deviceId)
     ↓
-SkillExecutor.execute()
-    └─ returns ActionResult (Success/Failed/ScreenContent/etc.)
+CONNECTED (only if AuthState == AUTHENTICATED)
 ```
+
+## Auth States
+
+```kotlin
+sealed interface AuthState {
+    data object Loading : AuthState
+    data object Registering : AuthState
+    data object Authenticated : AuthState
+    data object Refreshing : AuthState
+    data object LoggedOut : AuthState
+    data class Error(val reason: String) : AuthState
+}
+```
+
+## Connection States
+
+```kotlin
+enum class ConnectionState {
+    DISCONNECTED,
+    CONNECTING,
+    AUTHENTICATING,
+    CONNECTED,
+    RECONNECTING,
+    AUTH_FAILED,
+    STOPPED
+}
+```
+
+## Backend Auth
+
+```
+POST /api/v1/auth/token
+    Body: { device_id, device_name, device_model, os_version }
+    Response: { accessToken, refreshToken, expiresIn, deviceId, trusted }
+
+POST /api/v1/auth/refresh
+    Body: { refresh_token }
+    Response: { accessToken, refreshToken, expiresIn, deviceId, trusted }
+
+WS /ws?device=<deviceId>&token=<token>
+    Server validates via TokenService.validateToken()
+    → 4001 on failure
+```
+
+## Token Model
+
+- Opaque bearer tokens (NOT JWT)
+- Generated via `crypto.randomBytes(32).toString("base64url')`
+- Stored hashed in Supabase `device_sessions` table
+- Raw tokens never stored server-side
+- Access: 24h, Refresh: 30 days
 
 ## Files
 
+### Auth (NEW — com.jarvis.auth)
+- `AuthState.kt` — sealed interface: Loading/Registering/Authenticated/Refreshing/LoggedOut/Error
+- `TokenStore.kt` — EncryptedSharedPreferences, 5 keys (access/refresh/deviceId/accessExpiry/refreshExpiry)
+- `AuthManager.kt` — state machine, refreshMutex, initialize/register/refresh/logout
+
+### Backend Auth (NEW — backend/src/auth/)
+- `tokenService.js` — TokenService class, Supabase-backed, createSession/validateToken/refreshTokens
+- `sessionService.js` — SessionService class, getSession/revokeAllSessions/cleanupExpiredSessions
+- `enrollmentService.js` — EnrollmentService class, enrollDevice/verifyEnrollment
+- `websocketAuth.js` — WebSocketAuth class, handleConnection + Zod validation + stale cleanup
+
 ### Core
-- `AssistantRuntime.kt` — Singleton, owns all runtimes
-- `MainViewModel.kt` — AndroidViewModel, observes AssistantRuntime
-- `MainActivity.kt` — Thin, only permission handling + setContent
-
-### Auth
-- `AuthManager.kt` — TokenState enum, opaque bearer tokens, EncryptedSharedPreferences
-- `ApiClient.kt` — ApiResult<T>, OkHttp Authenticator for auto-refresh, bootstrap()
-
-### Voice
-- `VoiceRuntime.kt` — VoiceState machine, MicOwner, single mic owner rule
-- `OnnxWakeWordDetector.kt` — 3-model ONNX pipeline
-- `LiveKitWakeWordEngine.kt` — AudioRecord capture thread
-
-### Automation
-- `ActionValidator.kt` — ActionType enum, 18 allowed types, required params
-- `ActionPolicyEngine.kt` — validate → permission → confirm → execute pipeline
-- `ConfirmationManager.kt` — Activity-independent, with timeout
-- `SkillExecutor.kt` — ActionResult sealed interface
-- `AutomationController.kt` — awaiter patterns for view detection
+- `AssistantRuntime.kt` — Singleton, uses com.jarvis.auth.AuthManager, bootstraps auth before WS
+- `MainViewModel.kt` — AndroidViewModel, observes AuthState (not old TokenState)
+- `MainActivity.kt` — Thin, permission handling + setContent only
 
 ### Backend
-- `deviceSessionManager.js` — Supabase persistent sessions, token hashing
-- `index.js` — DeviceSessionManager, auth middleware, WS Zod validation
-- `commandRouter.js` — Strict 18-type action schema
+- `index.js` — imports createClient, wires TokenService/SessionService/WebSocketAuth
+- `middleware/auth.js` — createAuthMiddleware (Bearer + X-Device-ID)
+- `middleware/rateLimit.js` — createRateLimitMiddleware (IP-based)
+- `routes/auth.js` — POST /token, POST /refresh with Zod validation

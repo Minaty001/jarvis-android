@@ -1,15 +1,15 @@
 package com.jarvis.backend
 
 import android.util.Log
-import kotlinx.coroutines.*
-import okhttp3.*
-import org.json.JSONObject
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import java.util.concurrent.TimeUnit
 
 class WebSocketClient(
-    var wsUrl: String,
-    val connectionManager: ConnectionManager = ConnectionManager(),
-    private val authManager: AuthManager,
+    private val baseUrl: String,
     private val onMessageReceived: ((String) -> Unit)? = null,
     private val onConnected: (() -> Unit)? = null,
     private val onDisconnected: (() -> Unit)? = null
@@ -18,44 +18,29 @@ class WebSocketClient(
         private const val TAG = "WebSocketClient"
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private var reconnectJob: Job? = null
-
-    private var client: OkHttpClient = OkHttpClient.Builder()
-        .readTimeout(10, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .pingInterval(8, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
+    private var webSocket: WebSocket? = null
+    private val client = OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(30, TimeUnit.SECONDS)
         .build()
 
-    private var webSocket: WebSocket? = null
-    private var reconnectAttempts = 0
-    @Volatile private var disconnectRequested = false
+    @Volatile
+    private var isConnected = false
 
-    fun connect() {
-        if (!authManager.isAuthenticated) {
-            Log.w(TAG, "Cannot connect: not authenticated (state=${authManager.currentState})")
-            return
-        }
+    fun connect(token: String, deviceId: String) {
+        if (isConnected) return
 
-        val token = authManager.accessToken ?: return
-        val deviceId = authManager.deviceId ?: return
+        val cleanUrl = baseUrl.trim().trimEnd('/')
+        val url = "$cleanUrl/ws?device=$deviceId&token=$token"
 
-        disconnectRequested = false
-        reconnectJob?.cancel()
-
-        val separator = if (wsUrl.contains("?")) "&" else "?"
-        val targetUrl = "$wsUrl${separator}device=$deviceId&token=$token"
-
-        Log.i(TAG, "Connecting to ${wsUrl.substringBefore("?")}...")
-        connectionManager.setConnectionState(ConnectionState.CONNECTING)
-        val request = Request.Builder().url(targetUrl).build()
+        val request = Request.Builder()
+            .url(url)
+            .build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.i(TAG, "WebSocket connected")
-                reconnectAttempts = 0
-                connectionManager.onConnected()
+                isConnected = true
                 onConnected?.invoke()
             }
 
@@ -64,62 +49,60 @@ class WebSocketClient(
                 onMessageReceived?.invoke(text)
             }
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "WebSocket failure: ${t.message}. Scheduling reconnect...")
-                connectionManager.onDisconnected()
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                Log.i(TAG, "WebSocket closing: $reason ($code)")
+                webSocket.close(1000, null)
+                isConnected = false
                 onDisconnected?.invoke()
-                scheduleReconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.i(TAG, "WebSocket closed: $reason ($code)")
-                connectionManager.onDisconnected()
+                isConnected = false
                 onDisconnected?.invoke()
-                if (!disconnectRequested) scheduleReconnect()
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket failure: ${t.message}")
+                isConnected = false
+                onDisconnected?.invoke()
             }
         })
     }
 
-    private fun scheduleReconnect() {
-        if (disconnectRequested) return
-        if (reconnectJob?.isActive == true) return
-        reconnectJob = scope.launch {
-            connectionManager.setConnectionState(ConnectionState.RECONNECTING)
-            reconnectAttempts = (reconnectAttempts + 1).coerceAtMost(5)
-            val delayMs = (1000L * (1L shl reconnectAttempts)).coerceIn(1500L, 8000L)
-            delay(delayMs)
-
-            if (!authManager.isAuthenticated) {
-                Log.w(TAG, "Reconnect abort: not authenticated")
-                connectionManager.setConnectionState(ConnectionState.DISCONNECTED)
-                return@launch
-            }
-            connect()
-        }
+    fun disconnect() {
+        webSocket?.close(1000, "Client disconnect")
+        webSocket = null
+        isConnected = false
     }
 
     fun sendCommand(command: String) {
-        val msg = JSONObject().apply {
-            put("type", "command")
-            put("command", command)
+        if (!isConnected) {
+            Log.w(TAG, "Cannot send command: WebSocket not connected")
+            return
         }
-        val sent = webSocket?.send(msg.toString()) ?: false
-        if (!sent) Log.w(TAG, "Failed to send command (socket disconnected)")
+
+        val message = """
+            {
+                "type": "command",
+                "command": "$command"
+            }
+        """.trimIndent()
+
+        webSocket?.send(message)
     }
 
     fun sendPing() {
-        val msg = JSONObject().apply { put("type", "ping") }
-        webSocket?.send(msg.toString())
+        if (!isConnected) return
+
+        val message = """
+            {
+                "type": "ping"
+            }
+        """.trimIndent()
+
+        webSocket?.send(message)
     }
 
-    fun disconnect() {
-        disconnectRequested = true
-        reconnectJob?.cancel()
-        reconnectJob = null
-        webSocket?.close(1000, "Client disconnect")
-        webSocket = null
-        connectionManager.onDisconnected()
-    }
-
-    fun isConnected() = connectionManager.isConnected
+    fun isConnected(): Boolean = isConnected
 }

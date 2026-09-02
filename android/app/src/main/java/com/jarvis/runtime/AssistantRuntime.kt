@@ -2,8 +2,12 @@ package com.jarvis.runtime
 
 import android.content.Context
 import android.util.Log
+import com.jarvis.auth.AuthManager
+import com.jarvis.auth.AuthState
 import com.jarvis.automation.*
-import com.jarvis.backend.*
+import com.jarvis.backend.ApiClient
+import com.jarvis.backend.ConnectionManager
+import com.jarvis.backend.WebSocketClient
 import com.jarvis.config.Config
 import com.jarvis.stt.NativeSttManager
 import com.jarvis.tts.TtsManager
@@ -37,7 +41,7 @@ class AssistantRuntime(private val context: Context) {
     }
 
     val authManager = AuthManager(context)
-    val apiClient = ApiClient(authManager = authManager)
+    val apiClient = ApiClient()
 
     val connectionManager = ConnectionManager()
 
@@ -114,28 +118,48 @@ class AssistantRuntime(private val context: Context) {
     }
 
     suspend fun bootstrapAndConnect(): Boolean {
-        val success = apiClient.bootstrap()
-        if (success) {
-            connectWebSocket()
+        authManager.initialize()
+        if (authManager.currentState is AuthState.LoggedOut) {
+            authManager.registerDevice()
         }
-        return success
+        val authState = waitForAuthState()
+        if (authState !is AuthState.Authenticated) {
+            Log.w(TAG, "Auth not ready after bootstrap: $authState")
+            return false
+        }
+        connectWebSocket()
+        return true
+    }
+
+    private suspend fun waitForAuthState(): AuthState {
+        var attempts = 0
+        while (attempts < 30) {
+            val state = authManager.currentState
+            if (state is AuthState.Authenticated || state is AuthState.LoggedOut || state is AuthState.Error) {
+                return state
+            }
+            delay(200)
+            attempts++
+        }
+        return authManager.currentState
     }
 
     fun connectWebSocket() {
-        if (!authManager.isAuthenticated) {
-            Log.w(TAG, "Cannot connect WS: not authenticated")
+        val token = authManager.getAccessTokenForRequest()
+        val deviceId = authManager.deviceId
+        if (token == null || deviceId == null) {
+            Log.w(TAG, "Cannot connect WS: no token or deviceId")
             return
         }
 
         wsClient?.disconnect()
         wsClient = WebSocketClient(
-            wsUrl = Config.BACKEND_WS_URL,
-            authManager = authManager,
+            baseUrl = Config.BACKEND_WS_URL,
             onMessageReceived = { msg -> handleWsMessage(msg) },
             onConnected = { connectionManager.onConnected() },
             onDisconnected = { connectionManager.onDisconnected() }
         )
-        wsClient?.connect()
+        wsClient!!.connect(token, deviceId)
     }
 
     private fun handleWsMessage(msg: String) {

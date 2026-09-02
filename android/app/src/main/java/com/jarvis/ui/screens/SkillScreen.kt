@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Context
 import com.jarvis.backend.ApiClient
 import com.jarvis.backend.SkillResult
 import com.jarvis.config.Config
@@ -23,13 +24,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun SkillScreen() {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val apiClient = remember { ApiClient() }
     var skills by remember { mutableStateOf(listOf<SkillResult>()) }
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         isLoading = true
-        skills = apiClient.listSkills(Config.DEVICE_ID)
+        skills = apiClient.listSkills(Config.getDeviceId(context))
         isLoading = false
     }
 

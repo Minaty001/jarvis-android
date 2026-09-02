@@ -97,7 +97,7 @@ fun SettingsScreen(
 
     val infoSettings = listOf(
         InfoSettingItem(Icons.Default.Speed, "Primary LLM Provider", "Groq / OpenRouter / NIM"),
-        InfoSettingItem(Icons.Default.PhoneAndroid, "Device ID", Config.DEVICE_ID),
+        InfoSettingItem(Icons.Default.PhoneAndroid, "Device ID", Config.getDeviceId(context)),
         InfoSettingItem(Icons.Default.Info, "App Version", "1.0.0 (Production Build)")
     )
 
