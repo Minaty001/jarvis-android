@@ -1,6 +1,9 @@
 package com.jarvis.automation
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -73,6 +76,7 @@ class ActionPolicyEngine(
             ActionType.SEND_SMS -> PermissionChecker.Permission.SMS
             ActionType.READ_SCREEN -> PermissionChecker.Permission.ACCESSIBILITY
             ActionType.TAP, ActionType.TYPE, ActionType.SWIPE -> PermissionChecker.Permission.ACCESSIBILITY
+            ActionType.MAKE_CALL -> PermissionChecker.Permission.CALL_PHONE
             else -> null
         }
 
@@ -128,20 +132,32 @@ class ActionPolicyEngine(
     }
 }
 
-class PermissionChecker {
+class PermissionChecker(private val context: Context) {
     enum class Permission {
         ACCESSIBILITY,
         SMS,
         CONTACTS,
-        CALENDAR
+        CALENDAR,
+        CALL_PHONE,
+        CAMERA,
+        RECORD_AUDIO
     }
 
     fun hasPermission(permission: Permission): Boolean {
         return when (permission) {
             Permission.ACCESSIBILITY -> JarvisAccessibilityService.instance != null
-            Permission.SMS -> true
-            Permission.CONTACTS -> true
-            Permission.CALENDAR -> true
+            Permission.SMS -> hasOsPermission(android.Manifest.permission.SEND_SMS)
+            Permission.CONTACTS -> hasOsPermission(android.Manifest.permission.READ_CONTACTS)
+            Permission.CALENDAR -> hasOsPermission(android.Manifest.permission.READ_CALENDAR)
+            Permission.CALL_PHONE -> hasOsPermission(android.Manifest.permission.CALL_PHONE)
+            Permission.CAMERA -> hasOsPermission(android.Manifest.permission.CAMERA)
+            Permission.RECORD_AUDIO -> hasOsPermission(android.Manifest.permission.RECORD_AUDIO)
         }
+    }
+
+    private fun hasOsPermission(permission: String): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context, permission
+        ) == PackageManager.PERMISSION_GRANTED
     }
 }

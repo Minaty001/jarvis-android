@@ -51,7 +51,7 @@ class AssistantRuntime(private val context: Context) {
         }
     )
 
-    private val permissionChecker = PermissionChecker()
+    private val permissionChecker = PermissionChecker(context)
     val policyEngine = ActionPolicyEngine(permissionChecker, confirmationManager)
     val automationController = AutomationController(context)
     val skillExecutor = SkillExecutor(automationController, confirmationManager)
