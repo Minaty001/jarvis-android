@@ -13,7 +13,7 @@ const refreshSchema = z.object({
   refresh_token: z.string().min(1)
 });
 
-export function createAuthRoutes(tokenService, enrollmentService) {
+export function createAuthRoutes(tokenService, enrollmentService, sessionService) {
   const router = express.Router();
 
   router.post("/token", async (req, res) => {
@@ -67,6 +67,31 @@ export function createAuthRoutes(tokenService, enrollmentService) {
     } catch (error) {
       console.error("Refresh error:", error.message);
       res.status(500).json({ error: "Refresh failed" });
+    }
+  });
+
+  router.post("/revoke", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const deviceId = req.headers["x-device-id"];
+
+      if (!authHeader || !authHeader.startsWith("Bearer ") || !deviceId) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const token = authHeader.slice(7);
+      const isValid = await tokenService.validateToken(deviceId, token);
+      if (!isValid) {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+
+      if (sessionService) {
+        await sessionService.revokeAllSessions(deviceId);
+      }
+      res.json({ success: true, message: "All sessions revoked" });
+    } catch (error) {
+      console.error("Revoke error:", error.message);
+      res.status(500).json({ error: "Revoke failed" });
     }
   });
 

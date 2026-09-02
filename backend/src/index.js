@@ -44,7 +44,7 @@ app.use(createRateLimitMiddleware(100, 60000));
 const commandRouter = new CommandRouter(llm, memoryManager);
 
 if (tokenService) {
-  app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService));
+  app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService, sessionService));
   app.use(createAuthMiddleware(tokenService));
 }
 
@@ -74,6 +74,16 @@ setInterval(() => {
     websocketAuth.cleanupStaleConnections();
   }
 }, 60000);
+
+if (sessionService) {
+  setInterval(async () => {
+    try {
+      await sessionService.cleanupExpiredSessions();
+    } catch (e) {
+      console.error("Session cleanup failed:", e.message);
+    }
+  }, 3600000);
+}
 
 server.listen(CONFIG.port, () => {
   console.log(`JARVIS backend running on port ${CONFIG.port}`);
