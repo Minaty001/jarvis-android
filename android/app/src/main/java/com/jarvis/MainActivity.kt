@@ -150,7 +150,7 @@ fun JarvisApp(
                     onMicClick = { viewModel.startListening() },
                     isConnected = uiState.isConnected,
                     isAutomationEnabled = uiState.isAutomationEnabled,
-                    isListening = uiState.voiceState == com.jarvis.runtime.VoiceState.COMMAND_LISTENING
+                    isListening = uiState.voiceState == com.jarvis.voice.VoiceState.COMMAND_LISTENING
                 )
                 "data" -> DataScreen()
                 "map" -> MapScreen()

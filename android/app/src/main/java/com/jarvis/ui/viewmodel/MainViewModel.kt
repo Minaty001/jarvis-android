@@ -9,7 +9,7 @@ import com.jarvis.automation.ConfirmationResult
 import com.jarvis.backend.ConnectionState
 import com.jarvis.assistant.AssistantRuntime
 import com.jarvis.assistant.RuntimeState
-import com.jarvis.runtime.VoiceState
+import com.jarvis.voice.VoiceState
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 

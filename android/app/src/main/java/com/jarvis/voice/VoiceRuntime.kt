@@ -1,4 +1,4 @@
-package com.jarvis.runtime
+package com.jarvis.voice
 
 import android.util.Log
 import com.jarvis.stt.NativeSttManager
