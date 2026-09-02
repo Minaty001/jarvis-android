@@ -25,38 +25,31 @@ class SkillExecutor(
         private set
 
     suspend fun execute(actionsJson: org.json.JSONArray): Boolean {
-        for (i in 0 until actionsJson.length()) {
-            val action = actionsJson.getJSONObject(i)
-            val type = action.getString("type")
-            val params = action.optJSONObject("params") ?: JSONObject()
+        val plan = ActionValidator.parseActions(actionsJson)
+        val validation = ActionValidator.validatePlan(plan)
+        if (!validation.isValid) {
+            Log.w(TAG, "ActionPlan validation failed: ${validation.reason}")
+            return false
+        }
 
-            val validation = ActionValidator.validate(action)
-            if (!validation.isValid) {
-                Log.w(TAG, "Action validation failed: ${validation.reason}")
-                return false
-            }
-
-            if (ActionValidator.requiresConfirmation(action)) {
-                val riskLevel = ActionValidator.getRiskLevel(action)
-                val paramMap = mutableMapOf<String, String>()
-                for (key in params.keys()) {
-                    paramMap[key] = params.optString(key, "")
-                }
-                val result = confirmationManager?.requestConfirmation(type, riskLevel, paramMap)
+        for (action in plan.actions) {
+            if (ActionValidator.requiresConfirmation(JSONObject().put("type", action.type.value))) {
+                val paramMap = action.params.toMutableMap()
+                val result = confirmationManager?.requestConfirmation(action.type.value, action.riskLevel, paramMap)
                 if (result != ConfirmationResult.ALLOWED) {
-                    Log.i(TAG, "Action confirmation $result: $type")
+                    Log.i(TAG, "Action confirmation $result: ${action.type.value}")
                     return false
                 }
             }
 
-            val result = executeAction(type, params)
+            val result = executeAction(action)
             when (result) {
                 is ActionResult.Success -> { /* continue */ }
                 is ActionResult.ScreenContent -> { lastScreenContent = result.content }
                 is ActionResult.BatteryInfo -> { Log.d(TAG, result.summary) }
                 is ActionResult.CalendarInfo -> { Log.d(TAG, result.summary) }
                 is ActionResult.Failed -> {
-                    Log.e(TAG, "Action failed: $type (reason: ${result.reason})")
+                    Log.e(TAG, "Action failed: ${action.type.value} (reason: ${result.reason})")
                     return false
                 }
                 is ActionResult.NeedsPermission -> {
@@ -74,28 +67,28 @@ class SkillExecutor(
         return true
     }
 
-    private suspend fun executeAction(type: String, params: JSONObject): ActionResult {
-        return when (type) {
-            "open_app" -> {
-                val pkg = params.optString("package", "")
+    private suspend fun executeAction(action: ActionItem): ActionResult {
+        return when (action.type) {
+            ActionType.OPEN_APP -> {
+                val pkg = action.params["package"] ?: ""
                 if (pkg.isBlank()) return ActionResult.Failed("Missing package")
                 val launched = automationController.appController.launchApp(pkg)
                 if (launched) ActionResult.Success else ActionResult.Failed("App not found: $pkg")
             }
-            "tap" -> {
-                val text = params.optString("text", "")
+            ActionType.TAP -> {
+                val text = action.params["text"] ?: ""
                 if (text.isBlank()) return ActionResult.Failed("Missing text")
                 if (automationController.tapElement(text)) ActionResult.Success else ActionResult.Failed("Tap failed: $text")
             }
-            "type" -> {
-                val text = params.optString("text", "")
+            ActionType.TYPE -> {
+                val text = action.params["text"] ?: ""
                 if (text.isBlank()) return ActionResult.Failed("Missing text")
                 if (automationController.typeText(text)) ActionResult.Success else ActionResult.Failed("Type failed")
             }
-            "swipe" -> {
+            ActionType.SWIPE -> {
                 val service = JarvisAccessibilityService.instance
                     ?: return ActionResult.NeedsPermission("Accessibility")
-                val dir = params.optString("direction", "up")
+                val dir = action.params["direction"] ?: "up"
                 val ok = when (dir) {
                     "up" -> service.swipeUp()
                     "down" -> service.swipeDown()
@@ -105,44 +98,43 @@ class SkillExecutor(
                 }
                 if (ok) ActionResult.Success else ActionResult.Failed("Swipe $dir failed")
             }
-            "wait" -> {
-                val ms = params.optLong("durationMs", 1000).coerceIn(0, 30000)
-                kotlinx.coroutines.delay(ms)
+            ActionType.WAIT -> {
+                val ms = action.params["durationMs"]?.toLongOrNull() ?: 1000
+                kotlinx.coroutines.delay(ms.coerceIn(0, 30000))
                 ActionResult.Success
             }
-            "go_back" -> if (automationController.goBack()) ActionResult.Success else ActionResult.Failed("goBack failed")
-            "go_home" -> if (automationController.goHome()) ActionResult.Success else ActionResult.Failed("goHome failed")
-            "read_screen" -> {
+            ActionType.GO_BACK -> if (automationController.goBack()) ActionResult.Success else ActionResult.Failed("goBack failed")
+            ActionType.GO_HOME -> if (automationController.goHome()) ActionResult.Success else ActionResult.Failed("goHome failed")
+            ActionType.READ_SCREEN -> {
                 val content = automationController.readScreen()
                 if (content.isNotBlank()) ActionResult.ScreenContent(content) else ActionResult.Failed("No screen content")
             }
-            "send_sms" -> {
-                val phone = params.optString("phone", "")
-                val message = params.optString("message", "")
+            ActionType.SEND_SMS -> {
+                val phone = action.params["phone"] ?: ""
+                val message = action.params["message"] ?: ""
                 if (phone.isBlank() || message.isBlank()) return ActionResult.Failed("Missing phone or message")
                 val sent = automationController.sendSms(phone, message)
                 if (sent.success) ActionResult.Success else ActionResult.Failed("SMS failed")
             }
-            "bluetooth_on" -> if (automationController.toggleBluetooth(true)) ActionResult.Success else ActionResult.Failed("BT on failed")
-            "bluetooth_off" -> if (automationController.toggleBluetooth(false)) ActionResult.Success else ActionResult.Failed("BT off failed")
-            "bluetooth_toggle" -> if (automationController.toggleBluetoothAuto()) ActionResult.Success else ActionResult.Failed("BT toggle failed")
-            "wifi_on" -> if (automationController.toggleWifi(true)) ActionResult.Success else ActionResult.Failed("WiFi on failed")
-            "wifi_off" -> if (automationController.toggleWifi(false)) ActionResult.Success else ActionResult.Failed("WiFi off failed")
-            "wifi_toggle" -> if (automationController.toggleWifiAuto()) ActionResult.Success else ActionResult.Failed("WiFi toggle failed")
-            "battery_status" -> ActionResult.BatteryInfo(automationController.getBatterySummary())
-            "calendar_today" -> ActionResult.CalendarInfo(automationController.getCalendarSummary())
-            "calendar_search" -> {
-                val query = params.optString("query", "")
+            ActionType.BLUETOOTH_ON -> if (automationController.toggleBluetooth(true)) ActionResult.Success else ActionResult.Failed("BT on failed")
+            ActionType.BLUETOOTH_OFF -> if (automationController.toggleBluetooth(false)) ActionResult.Success else ActionResult.Failed("BT off failed")
+            ActionType.BLUETOOTH_TOGGLE -> if (automationController.toggleBluetoothAuto()) ActionResult.Success else ActionResult.Failed("BT toggle failed")
+            ActionType.WIFI_ON -> if (automationController.toggleWifi(true)) ActionResult.Success else ActionResult.Success
+            ActionType.WIFI_OFF -> if (automationController.toggleWifi(false)) ActionResult.Success else ActionResult.Failed("WiFi off failed")
+            ActionType.WIFI_TOGGLE -> if (automationController.toggleWifiAuto()) ActionResult.Success else ActionResult.Failed("WiFi toggle failed")
+            ActionType.BATTERY_STATUS -> ActionResult.BatteryInfo(automationController.getBatterySummary())
+            ActionType.CALENDAR_TODAY -> ActionResult.CalendarInfo(automationController.getCalendarSummary())
+            ActionType.CALENDAR_SEARCH -> {
+                val query = action.params["query"] ?: ""
                 if (query.isBlank()) return ActionResult.Failed("Missing query")
                 val events = automationController.searchCalendar(query)
                 ActionResult.CalendarInfo(events.joinToString { it.title })
             }
-            "share_text" -> {
-                val text = params.optString("text", "")
+            ActionType.SHARE_TEXT -> {
+                val text = action.params["text"] ?: ""
                 if (text.isBlank()) return ActionResult.Failed("Missing text")
                 if (automationController.shareText(text)) ActionResult.Success else ActionResult.Failed("Share failed")
             }
-            else -> ActionResult.Unsupported("Unknown action: $type")
         }
     }
 }
