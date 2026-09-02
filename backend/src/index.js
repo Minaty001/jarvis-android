@@ -12,6 +12,7 @@ import { commandRoutes } from './routes/command.js';
 import { memoryRoutes } from './routes/memory.js';
 import { skillRoutes } from './routes/skill.js';
 import { sanitizeMiddleware } from './middleware/sanitize.js';
+import { authMiddleware } from './middleware/auth.js';
 
 const llm = new LLMOrchestrator();
 const sessionManager = new SessionManager();
@@ -118,10 +119,12 @@ app.post('/api/v1/auth/refresh', (req, res) => {
   });
 });
 
+const protectedAuth = authMiddleware(deviceTokens);
+
 app.use(healthRoutes(llm, sessionManager, memoryManager));
-app.use(commandRoutes(commandRouter));
-app.use(memoryRoutes(memoryManager));
-app.use(skillRoutes(memoryManager));
+app.use(commandRoutes(commandRouter, protectedAuth));
+app.use(memoryRoutes(memoryManager, protectedAuth));
+app.use(skillRoutes(memoryManager, protectedAuth));
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
@@ -143,9 +146,21 @@ wss.on('connection', (ws, req) => {
   }
 
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-  const deviceId = url.searchParams.get('device') || `ws-${Date.now()}`;
-  const session = sessionManager.create(deviceId);
+  const token = url.searchParams.get('token');
+  const deviceId = url.searchParams.get('device');
 
+  if (!token || !deviceId) {
+    ws.close(4001, 'Missing token or device ID');
+    return;
+  }
+
+  const tokenEntry = deviceTokens.get(deviceId);
+  if (!tokenEntry || tokenEntry.token !== token) {
+    ws.close(4001, 'Invalid token');
+    return;
+  }
+
+  const session = sessionManager.create(deviceId);
   console.log(`WebSocket connected: ${deviceId}`);
 
   ws.on('message', async (raw) => {
@@ -153,7 +168,7 @@ wss.on('connection', (ws, req) => {
       const msg = JSON.parse(raw.toString());
 
       if (msg.type === 'command') {
-        const result = await commandRouter.route(msg.command, session, msg.userId || deviceId);
+        const result = await commandRouter.route(msg.command, session, deviceId);
         ws.send(JSON.stringify({ type: 'response', data: result }));
       } else if (msg.type === 'ping') {
         ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));

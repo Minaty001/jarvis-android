@@ -6,6 +6,7 @@ import android.util.Log
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import kotlinx.coroutines.*
 import java.nio.FloatBuffer
 import kotlin.math.sqrt
 import kotlin.math.min
@@ -136,7 +137,12 @@ class OnnxWakeWordDetector(
 
     override fun isAvailable(): Boolean = available
 
-    init { loadModels() }
+    private val loadScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var loadJob: Job? = null
+
+    init {
+        loadJob = loadScope.launch { loadModels() }
+    }
 
     private fun loadModels() {
         val ctx = context ?: run {
@@ -397,8 +403,12 @@ class OnnxWakeWordDetector(
     override fun setListener(listener: WakeWordListener) { this.listener = listener }
 
     override fun start() {
-        if (!available) loadModels()
-        flushBuffers()
+        loadScope.launch {
+            loadJob?.join()
+            if (available) {
+                withContext(Dispatchers.Main) { flushBuffers() }
+            }
+        }
     }
 
     override fun stop() {
@@ -416,6 +426,7 @@ class OnnxWakeWordDetector(
     override fun release() {
         listener = null
         flushBuffers()
+        loadScope.cancel()
         try { melSession?.close() } catch (_: Exception) {}
         try { embSession?.close() } catch (_: Exception) {}
         try { clsSession?.close() } catch (_: Exception) {}

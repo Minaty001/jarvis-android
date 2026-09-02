@@ -3,23 +3,22 @@ import { z } from 'zod';
 
 const SearchSchema = z.object({
   query: z.string().min(1),
-  userId: z.string().min(1),
   limit: z.coerce.number().int().min(1).max(20).optional().default(5),
 });
 
 const StoreSchema = z.object({
-  userId: z.string().min(1),
   content: z.string().min(1).max(5000),
   memoryType: z.enum(['fact', 'skill', 'preference', 'conversation']).default('conversation'),
   importance: z.number().min(0).max(1).optional().default(0.5),
 });
 
-export function memoryRoutes(memoryManager) {
+export function memoryRoutes(memoryManager, authMiddleware) {
   const router = Router();
 
-  router.get('/memory/search', async (req, res) => {
+  router.get('/memory/search', authMiddleware, async (req, res) => {
     try {
-      const { query, userId, limit } = SearchSchema.parse(req.query);
+      const { query, limit } = SearchSchema.parse(req.query);
+      const userId = req.authenticatedDeviceId;
       const results = await memoryManager.search(userId, query, limit);
       res.json({ results });
     } catch (err) {
@@ -30,11 +29,10 @@ export function memoryRoutes(memoryManager) {
     }
   });
 
-  router.get('/memory/recent', async (req, res) => {
+  router.get('/memory/recent', authMiddleware, async (req, res) => {
     try {
-      const userId = req.query.userId;
+      const userId = req.authenticatedDeviceId;
       const limit = parseInt(req.query.limit || '10', 10);
-      if (!userId) return res.status(400).json({ status: 'error', message: 'userId required' });
       const results = await memoryManager.getRecentMemories(userId, limit);
       res.json({ results });
     } catch (err) {
@@ -42,9 +40,10 @@ export function memoryRoutes(memoryManager) {
     }
   });
 
-  router.post('/memory/store', async (req, res) => {
+  router.post('/memory/store', authMiddleware, async (req, res) => {
     try {
-      const { userId, content, memoryType, importance } = StoreSchema.parse(req.body);
+      const { content, memoryType, importance } = StoreSchema.parse(req.body);
+      const userId = req.authenticatedDeviceId;
       const memory = await memoryManager.store(userId, content, memoryType, importance);
       res.json({ status: 'stored', memory });
     } catch (err) {
@@ -55,23 +54,26 @@ export function memoryRoutes(memoryManager) {
     }
   });
 
-  router.delete('/memory/:id', async (req, res) => {
+  router.delete('/memory/:id', authMiddleware, async (req, res) => {
     try {
       const { id } = req.params;
+      const userId = req.authenticatedDeviceId;
       if (!memoryManager.available) {
         return res.status(503).json({ status: 'error', message: 'Memory not available' });
       }
-      await memoryManager.deleteMemory(id);
+      const deleted = await memoryManager.deleteMemory(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ status: 'error', message: 'Memory not found or access denied' });
+      }
       res.json({ status: 'deleted', id });
     } catch (err) {
       res.status(500).json({ status: 'error', message: err.message });
     }
   });
 
-  router.get('/memory/stats', async (req, res) => {
+  router.get('/memory/stats', authMiddleware, async (req, res) => {
     try {
-      const userId = req.query.userId;
-      if (!userId) return res.status(400).json({ status: 'error', message: 'userId required' });
+      const userId = req.authenticatedDeviceId;
       const stats = await memoryManager.getStats(userId);
       res.json(stats);
     } catch (err) {

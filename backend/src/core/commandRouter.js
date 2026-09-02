@@ -1,3 +1,18 @@
+import { z } from 'zod';
+
+const ActionSchema = z.object({
+  type: z.string().min(1),
+  params: z.record(z.any()).optional().default({}),
+});
+
+const LLMOutputSchema = z.object({
+  intent: z.string().optional().default('unknown'),
+  requires_automation: z.boolean().optional().default(false),
+  actions: z.array(ActionSchema).optional().default([]),
+  llm_queries: z.array(z.string()).optional().default([]),
+  response: z.string().optional().default(''),
+}).passthrough();
+
 const SYSTEM_PROMPT = `You are JARVIS, an AI assistant for Android that helps users automate tasks on their phone.
 
 ## Your Abilities
@@ -37,7 +52,7 @@ export class CommandRouter {
     this.memory = memoryManager;
   }
 
-  async route(command, session, userId) {
+  async route(command, session, userId, context) {
     session.addMessage('user', command);
 
     // STEP 1: Check for matching learned skill BEFORE calling LLM
@@ -82,19 +97,49 @@ export class CommandRouter {
 
     const result = await this.llm.generate(messages);
 
-    // STEP 4: Parse JSON response
+    // STEP 4: Parse and validate JSON response
     let parsed;
     try {
       const content = result.content;
       const jsonMatch = content.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : { intent: 'unknown', response: content, actions: [] };
+      if (!jsonMatch) {
+        parsed = { intent: 'direct_response', response: content, actions: [] };
+      } else {
+        const raw = JSON.parse(jsonMatch[0]);
+        const validated = LLMOutputSchema.safeParse(raw);
+        if (validated.success) {
+          parsed = validated.data;
+        } else {
+          console.warn('LLM output validation failed:', validated.error.errors);
+          parsed = {
+            intent: raw.intent || 'unknown',
+            response: raw.response || content,
+            actions: Array.isArray(raw.actions) ? raw.actions : [],
+            requires_automation: false,
+          };
+        }
+      }
     } catch {
       parsed = { intent: 'direct_response', response: result.content, actions: [] };
     }
 
+    // STEP 5: Validate each action in the plan
+    const validActions = [];
+    for (const action of parsed.actions) {
+      if (!action.type || typeof action.type !== 'string') {
+        console.warn('Dropping action with missing type:', action);
+        continue;
+      }
+      validActions.push({
+        type: action.type,
+        params: action.params && typeof action.params === 'object' ? action.params : {},
+      });
+    }
+    parsed.actions = validActions;
+
     session.addMessage('assistant', parsed.response || '');
 
-    // STEP 5: Store conversation memory
+    // STEP 6: Store conversation memory
     if (this.memory && userId) {
       try {
         await this.memory.store(userId, `User: ${command}\nJARVIS: ${parsed.response}`, 'conversation');

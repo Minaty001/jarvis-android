@@ -19,8 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import androidx.work.*
-import com.jarvis.automation.AutomationController
-import com.jarvis.automation.SkillExecutor
+import com.jarvis.automation.*
 import com.jarvis.audio.ClapDetector
 import com.jarvis.backend.AuthTokenManager
 import com.jarvis.backend.ConnectionManager
@@ -37,8 +36,12 @@ import com.jarvis.wakeword.LiveKitWakeWordEngine
 import com.jarvis.wakeword.OnnxWakeWordDetector
 import com.jarvis.wakeword.WakeWordConfig
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
+
+enum class VoiceInputMode { OFF, WAKE_WORD, COMMAND }
 
 class MainActivity : ComponentActivity() {
     companion object {
@@ -51,9 +54,26 @@ class MainActivity : ComponentActivity() {
     private var clapDetector: ClapDetector? = null
     private var authTokenManager: AuthTokenManager? = null
     private var sendCommand: ((String) -> Unit)? = null
+    private var voiceMode = VoiceInputMode.OFF
+    private val authToken: AuthTokenManager by lazy { AuthTokenManager(this) }
 
     private val automationController by lazy { AutomationController(this) }
-    private val skillExecutor by lazy { SkillExecutor(automationController) }
+
+    private var confirmationRequest by mutableStateOf<ConfirmationRequest?>(null)
+
+    private val confirmationGate = object : ConfirmationGate {
+        override suspend fun requestConfirmation(
+            actionType: String,
+            riskLevel: RiskLevel,
+            params: Map<String, String>
+        ): Boolean = suspendCancellableCoroutine { cont ->
+            runOnUiThread {
+                confirmationRequest = ConfirmationRequest(actionType, riskLevel, params, cont)
+            }
+        }
+    }
+
+    private val skillExecutor by lazy { SkillExecutor(automationController, confirmationGate) }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -75,6 +95,23 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             JarvisTheme {
+                val request = confirmationRequest
+                if (request != null) {
+                    ConfirmationDialog(
+                        actionType = request.actionType,
+                        riskLevel = request.riskLevel,
+                        params = request.params,
+                        onConfirm = {
+                            confirmationRequest = null
+                            request.continuation.resume(true)
+                        },
+                        onDeny = {
+                            confirmationRequest = null
+                            request.continuation.resume(false)
+                        }
+                    )
+                }
+
                 JarvisApp(
                     onMicClick = { toggleListening() },
                     speakText = { speakText(it) },
@@ -82,7 +119,10 @@ class MainActivity : ComponentActivity() {
                     onAutomationPlan = { executeAutomationPlan(it) },
                     isAutomationEnabled = { automationController.isAccessibilityEnabled },
                     onEnableAutomation = automationController::openAccessibilitySettings,
-                    isListening = { isListeningActive }
+                    isListening = { isListeningActive },
+                    onToggleWakeWord = { toggleWakeWord() },
+                    isWakeWordEnabled = { voiceMode == VoiceInputMode.WAKE_WORD },
+                    authTokenManager = authToken
                 )
             }
         }
@@ -123,15 +163,8 @@ class MainActivity : ComponentActivity() {
                 onError = { error -> Log.w(TAG, "STT error: $error") }
             )
         }
-        clapDetector = ClapDetector(this).also { it.start() }
 
         initWakeWordEngine()
-
-        lifecycleScope.launch {
-            clapDetector?.doubleClaps?.collect {
-                runOnUiThread { activateListening() }
-            }
-        }
     }
 
     private fun initWakeWordEngine() {
@@ -146,14 +179,21 @@ class MainActivity : ComponentActivity() {
             wakeEngine?.setOnErrorListener { e ->
                 Log.e(TAG, "Wake word engine error", e)
             }
-            val started = wakeEngine?.startMonitoring() ?: false
-            if (started) {
-                Log.i(TAG, "ONNX wake word engine started")
-            } else {
-                Log.w(TAG, "Failed to start wake word engine")
-            }
+            Log.i(TAG, "Wake word engine initialized (not started — user must enable)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize wake word engine", e)
+        }
+    }
+
+    private fun toggleWakeWord() {
+        if (voiceMode == VoiceInputMode.WAKE_WORD) {
+            wakeEngine?.stop()
+            voiceMode = VoiceInputMode.OFF
+            Log.i(TAG, "Wake word disabled")
+        } else {
+            wakeEngine?.startMonitoring()
+            voiceMode = VoiceInputMode.WAKE_WORD
+            Log.i(TAG, "Wake word enabled")
         }
     }
 
@@ -167,26 +207,31 @@ class MainActivity : ComponentActivity() {
             return
         }
         isListeningActive = true
+        voiceMode = VoiceInputMode.COMMAND
         Toast.makeText(this, "Listening...", Toast.LENGTH_SHORT).show()
 
         wakeEngine?.pause()
+        clapDetector?.stop()
 
         val started = stt.startListening(
             onResult = { text ->
                 isListeningActive = false
                 wakeEngine?.resume()
+                voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
                 sendCommandToBackend(text)
             },
             onPartialResult = { },
             onError = { errorMsg ->
                 isListeningActive = false
                 wakeEngine?.resume()
+                voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
                 Toast.makeText(this, errorMsg, Toast.LENGTH_SHORT).show()
             }
         )
         if (!started) {
             isListeningActive = false
             wakeEngine?.resume()
+            voiceMode = if (wakeEngine != null) VoiceInputMode.WAKE_WORD else VoiceInputMode.OFF
         }
     }
 
@@ -236,6 +281,49 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class ConfirmationRequest(
+    val actionType: String,
+    val riskLevel: RiskLevel,
+    val params: Map<String, String>,
+    val continuation: kotlinx.coroutines.CancellableContinuation<Boolean>
+)
+
+@Composable
+fun ConfirmationDialog(
+    actionType: String,
+    riskLevel: RiskLevel,
+    params: Map<String, String>,
+    onConfirm: () -> Unit,
+    onDeny: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDeny,
+        title = { Text("Confirm Action") },
+        text = {
+            Column {
+                Text("Action: $actionType", style = MaterialTheme.typography.bodyLarge)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Risk: $riskLevel", style = MaterialTheme.typography.bodyMedium,
+                    color = when (riskLevel) {
+                        RiskLevel.HIGH -> MaterialTheme.colorScheme.error
+                        RiskLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.onSurface
+                    })
+                Spacer(modifier = Modifier.height(8.dp))
+                params.forEach { (key, value) ->
+                    Text("$key: $value", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Allow") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDeny) { Text("Deny") }
+        }
+    )
+}
+
 @Composable
 fun JarvisApp(
     onMicClick: () -> Unit = {},
@@ -244,7 +332,10 @@ fun JarvisApp(
     onAutomationPlan: (org.json.JSONArray) -> Unit = {},
     isAutomationEnabled: () -> Boolean = { false },
     onEnableAutomation: () -> Unit = {},
-    isListening: () -> Boolean = { false }
+    isListening: () -> Boolean = { false },
+    onToggleWakeWord: () -> Unit = {},
+    isWakeWordEnabled: () -> Boolean = { false },
+    authTokenManager: AuthTokenManager? = null
 ) {
     var currentScreen by remember { mutableStateOf("home") }
     var isConnected by remember { mutableStateOf(false) }
@@ -253,6 +344,7 @@ fun JarvisApp(
     val wsClient = remember {
         WebSocketClient(
             wsUrl = Config.BACKEND_WS_URL,
+            authTokenManager = authTokenManager,
             onMessageReceived = { msg ->
                 try {
                     val data = JSONObject(msg).optJSONObject("data")

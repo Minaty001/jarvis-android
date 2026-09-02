@@ -1,20 +1,26 @@
 package com.jarvis.automation
 
 import android.util.Log
-import kotlinx.coroutines.delay
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
-class SkillExecutor(private val automationController: AutomationController) {
+interface ConfirmationGate {
+    suspend fun requestConfirmation(actionType: String, riskLevel: RiskLevel, params: Map<String, String>): Boolean
+}
+
+class SkillExecutor(
+    private val automationController: AutomationController,
+    private val confirmationGate: ConfirmationGate? = null
+) {
     companion object {
         private const val TAG = "SkillExecutor"
     }
 
-    suspend fun execute(actionsJson: JSONArray): Boolean {
+    suspend fun execute(actionsJson: org.json.JSONArray): Boolean {
         for (i in 0 until actionsJson.length()) {
             val action = actionsJson.getJSONObject(i)
             val type = action.getString("type")
-            val params = action.optJSONObject("params") ?: JSONObject()
+            val params = action.optJSONObject("params") ?: org.json.JSONObject()
 
             val validation = ActionValidator.validate(action)
             if (!validation.isValid) {
@@ -23,7 +29,16 @@ class SkillExecutor(private val automationController: AutomationController) {
             }
 
             if (ActionValidator.requiresConfirmation(action)) {
-                Log.i(TAG, "Action requires confirmation: $type (risk: ${ActionValidator.getRiskLevel(action)})")
+                val riskLevel = ActionValidator.getRiskLevel(action)
+                val paramMap = mutableMapOf<String, String>()
+                for (key in params.keys()) {
+                    paramMap[key] = params.optString(key, "")
+                }
+                val confirmed = confirmationGate?.requestConfirmation(type, riskLevel, paramMap) ?: false
+                if (!confirmed) {
+                    Log.i(TAG, "Action confirmation denied: $type")
+                    return false
+                }
             }
 
             val success = when (type) {
@@ -43,7 +58,7 @@ class SkillExecutor(private val automationController: AutomationController) {
                         else -> false
                     }
                 }
-                "wait" -> { delay(params.optLong("durationMs", 1000)); true }
+                "wait" -> { kotlinx.coroutines.delay(params.optLong("durationMs", 1000)); true }
                 "go_back" -> automationController.goBack()
                 "go_home" -> automationController.goHome()
                 "read_screen" -> { automationController.readScreen(); true }
@@ -70,7 +85,7 @@ class SkillExecutor(private val automationController: AutomationController) {
             }
 
             if (!success) { Log.e(TAG, "Action failed: $type"); return false }
-            delay(500)
+            kotlinx.coroutines.delay(500)
         }
         return true
     }

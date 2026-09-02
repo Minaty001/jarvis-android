@@ -7,16 +7,16 @@ const SkillSchema = z.object({
     type: z.string(),
     params: z.record(z.any()).optional().default({}),
   })),
-  userId: z.string().min(1),
   name: z.string().optional(),
 });
 
-export function skillRoutes(memoryManager) {
+export function skillRoutes(memoryManager, authMiddleware) {
   const router = Router();
 
-  router.post('/skill/learn', async (req, res) => {
+  router.post('/skill/learn', authMiddleware, async (req, res) => {
     try {
-      const { command, actions, userId, name } = SkillSchema.parse(req.body);
+      const { command, actions, name } = SkillSchema.parse(req.body);
+      const userId = req.authenticatedDeviceId;
       const skillName = name || command.slice(0, 50);
       const skill = await memoryManager.storeSkill(
         userId,
@@ -34,11 +34,12 @@ export function skillRoutes(memoryManager) {
     }
   });
 
-  router.get('/skill/match', async (req, res) => {
+  router.get('/skill/match', authMiddleware, async (req, res) => {
     try {
-      const { userId, command } = req.query;
-      if (!userId || !command) {
-        return res.status(400).json({ status: 'error', message: 'userId and command required' });
+      const { command } = req.query;
+      const userId = req.authenticatedDeviceId;
+      if (!command) {
+        return res.status(400).json({ status: 'error', message: 'command required' });
       }
       const skill = await memoryManager.matchSkill(userId, command);
       res.json({ skill });
@@ -47,10 +48,9 @@ export function skillRoutes(memoryManager) {
     }
   });
 
-  router.get('/skill/list', async (req, res) => {
+  router.get('/skill/list', authMiddleware, async (req, res) => {
     try {
-      const userId = req.query.userId;
-      if (!userId) return res.status(400).json({ status: 'error', message: 'userId required' });
+      const userId = req.authenticatedDeviceId;
       const skills = await memoryManager.listSkills(userId);
       res.json({ skills });
     } catch (err) {
@@ -58,10 +58,14 @@ export function skillRoutes(memoryManager) {
     }
   });
 
-  router.delete('/skill/:id', async (req, res) => {
+  router.delete('/skill/:id', authMiddleware, async (req, res) => {
     try {
       const { id } = req.params;
-      await memoryManager.deleteSkill(id);
+      const userId = req.authenticatedDeviceId;
+      const deleted = await memoryManager.deleteSkill(id, userId);
+      if (!deleted) {
+        return res.status(404).json({ status: 'error', message: 'Skill not found or access denied' });
+      }
       res.json({ status: 'deleted', id });
     } catch (err) {
       res.status(500).json({ status: 'error', message: err.message });

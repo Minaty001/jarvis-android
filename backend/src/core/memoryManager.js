@@ -43,14 +43,18 @@ export class MemoryManager {
     return data;
   }
 
-  async deleteMemory(memoryId) {
+  async deleteMemory(memoryId, userId) {
     if (!this.available) return false;
-    const { error } = await this.supabase
+    const dbUserId = await this._getUserId(userId);
+    const { data, error } = await this.supabase
       .from('memories')
       .delete()
-      .eq('id', memoryId);
+      .eq('id', memoryId)
+      .eq('user_id', dbUserId)
+      .select()
+      .single();
     if (error) throw error;
-    return true;
+    return !!data;
   }
 
   async search(userId, query, limit = CONFIG.memorySearchLimit) {
@@ -214,14 +218,18 @@ export class MemoryManager {
     return data || [];
   }
 
-  async deleteSkill(skillId) {
+  async deleteSkill(skillId, userId) {
     if (!this.available) return false;
-    const { error } = await this.supabase
+    const dbUserId = await this._getUserId(userId);
+    const { data, error } = await this.supabase
       .from('skills')
       .delete()
-      .eq('id', skillId);
+      .eq('id', skillId)
+      .eq('user_id', dbUserId)
+      .select()
+      .single();
     if (error) throw error;
-    return true;
+    return !!data;
   }
 
   async _incrementSkillUsage(skillId) {
