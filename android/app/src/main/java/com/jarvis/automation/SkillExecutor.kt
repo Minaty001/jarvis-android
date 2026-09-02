@@ -6,11 +6,16 @@ import org.json.JSONObject
 sealed interface ActionResult {
     data object Success : ActionResult
     data class Failed(val reason: String) : ActionResult
+    data object Denied : ActionResult
+    data object Cancelled : ActionResult
+    data object Timeout : ActionResult
+    data object NeedsConfirmation : ActionResult
     data class ScreenContent(val content: String) : ActionResult
     data class BatteryInfo(val summary: String) : ActionResult
     data class CalendarInfo(val summary: String) : ActionResult
     data class NeedsPermission(val permission: String) : ActionResult
     data class Unsupported(val reason: String) : ActionResult
+    data object RequiresUserAction : ActionResult
 }
 
 class SkillExecutor(
@@ -58,6 +63,26 @@ class SkillExecutor(
                 }
                 is ActionResult.Unsupported -> {
                     Log.w(TAG, "Action unsupported: ${result.reason}")
+                    return false
+                }
+                is ActionResult.Denied -> {
+                    Log.w(TAG, "Action denied by user")
+                    return false
+                }
+                is ActionResult.Cancelled -> {
+                    Log.i(TAG, "Action cancelled")
+                    return false
+                }
+                is ActionResult.Timeout -> {
+                    Log.w(TAG, "Action timed out")
+                    return false
+                }
+                is ActionResult.NeedsConfirmation -> {
+                    Log.w(TAG, "Action needs confirmation but no manager")
+                    return false
+                }
+                is ActionResult.RequiresUserAction -> {
+                    Log.w(TAG, "Action requires user action (e.g. BT/WiFi toggle)")
                     return false
                 }
             }
@@ -137,7 +162,7 @@ class SkillExecutor(
                     "toggle" -> automationController.toggleBluetoothAuto()
                     else -> false
                 }
-                if (result) ActionResult.Success else ActionResult.Failed("Bluetooth $btAction failed")
+                if (result) ActionResult.Success else ActionResult.RequiresUserAction
             }
             ActionType.WIFI -> {
                 val wifiAction = action.params["action"] ?: "toggle"
@@ -147,7 +172,7 @@ class SkillExecutor(
                     "toggle" -> automationController.toggleWifiAuto()
                     else -> false
                 }
-                if (result) ActionResult.Success else ActionResult.Failed("WiFi $wifiAction failed")
+                if (result) ActionResult.Success else ActionResult.RequiresUserAction
             }
             ActionType.BATTERY_STATUS -> ActionResult.BatteryInfo(automationController.getBatterySummary())
             ActionType.CALENDAR -> {
