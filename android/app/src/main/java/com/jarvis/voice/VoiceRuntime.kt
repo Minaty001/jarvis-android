@@ -1,11 +1,11 @@
 package com.jarvis.voice
 
 import android.util.Log
+import com.jarvis.audio.AudioSessionManager
+import com.jarvis.audio.AudioSessionState
 import com.jarvis.stt.NativeSttManager
 import com.jarvis.tts.TtsManager
 import com.jarvis.wakeword.LiveKitWakeWordEngine
-import com.jarvis.wakeword.OnnxWakeWordDetector
-import com.jarvis.wakeword.WakeWordConfig
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,7 +30,10 @@ enum class MicOwner {
     TTS
 }
 
-class VoiceRuntime(private val scope: CoroutineScope) {
+class VoiceRuntime(
+    private val scope: CoroutineScope,
+    private val audioSessionManager: AudioSessionManager? = null
+) {
     companion object {
         private const val TAG = "VoiceRuntime"
     }
@@ -69,6 +72,11 @@ class VoiceRuntime(private val scope: CoroutineScope) {
             Log.w(TAG, "Cannot start wake: state=${_state.value}")
             return false
         }
+        if (_micOwner.value != MicOwner.NONE && _micOwner.value != MicOwner.WAKE) {
+            Log.w(TAG, "Mic owned by ${_micOwner.value}, cannot start wake")
+            return false
+        }
+
         val wake = wakeEngine ?: return false
         if (!wake.isAvailable) {
             Log.w(TAG, "Wake engine unavailable")
@@ -77,11 +85,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
             return false
         }
 
-        if (_micOwner.value != MicOwner.NONE && _micOwner.value != MicOwner.WAKE) {
-            Log.w(TAG, "Mic owned by ${_micOwner.value}, cannot start wake")
-            return false
-        }
-
+        audioSessionManager?.requestFocus()
         wake.setOnWakeListener {
             scope.launch(Dispatchers.Main) {
                 handleWakeDetected()
@@ -98,6 +102,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
         if (started) {
             _state.value = VoiceState.WAKE_LISTENING
             _micOwner.value = MicOwner.WAKE
+            audioSessionManager?.startRecording()
             Log.i(TAG, "Wake listening started")
         }
         return started
@@ -107,6 +112,8 @@ class VoiceRuntime(private val scope: CoroutineScope) {
         if (_micOwner.value == MicOwner.WAKE) {
             wakeEngine?.stop()
             _micOwner.value = MicOwner.NONE
+            audioSessionManager?.stopRecording()
+            audioSessionManager?.abandonFocus()
             if (_state.value == VoiceState.WAKE_LISTENING) {
                 _state.value = VoiceState.READY
             }
@@ -116,7 +123,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
 
     private suspend fun handleWakeDetected() {
         if (_state.value != VoiceState.WAKE_LISTENING) return
-        Log.i(TAG, "Wake detected → switching to COMMAND_LISTENING")
+        Log.i(TAG, "Wake detected -> switching to COMMAND_LISTENING")
         wakeEngine?.pause()
         _micOwner.value = MicOwner.COMMAND
         _state.value = VoiceState.COMMAND_LISTENING
@@ -137,8 +144,10 @@ class VoiceRuntime(private val scope: CoroutineScope) {
             wakeEngine?.pause()
         }
 
+        audioSessionManager?.requestFocus()
         _micOwner.value = MicOwner.COMMAND
         _state.value = VoiceState.COMMAND_LISTENING
+        audioSessionManager?.startRecording()
         startSttListening()
         return true
     }
@@ -149,6 +158,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
             onResult = { text ->
                 scope.launch(Dispatchers.Main) {
                     _state.value = VoiceState.PROCESSING
+                    audioSessionManager?.stopRecording()
                     onCommandDetected?.invoke(text)
                 }
             },
@@ -156,6 +166,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
             onError = { error ->
                 scope.launch(Dispatchers.Main) {
                     Log.w(TAG, "STT error: $error")
+                    audioSessionManager?.stopRecording()
                     returnToIdle()
                     onError?.invoke(error)
                 }
@@ -166,13 +177,20 @@ class VoiceRuntime(private val scope: CoroutineScope) {
     fun stopCommandListening() {
         sttManager?.stopListening()
         if (_micOwner.value == MicOwner.COMMAND) {
+            audioSessionManager?.stopRecording()
             returnToIdle()
         }
     }
 
     fun startSpeaking(text: String) {
+        if (_micOwner.value != MicOwner.NONE) {
+            Log.w(TAG, "Cannot speak: mic owned by ${_micOwner.value}")
+            return
+        }
         _state.value = VoiceState.SPEAKING
         _micOwner.value = MicOwner.TTS
+        audioSessionManager?.requestFocus()
+        audioSessionManager?.startPlayback()
         ttsManager?.speak(text)
         scope.launch {
             delay(500)
@@ -182,12 +200,15 @@ class VoiceRuntime(private val scope: CoroutineScope) {
 
     fun returnToIdle() {
         _micOwner.value = MicOwner.NONE
+        audioSessionManager?.stopRecording()
+        audioSessionManager?.stopPlayback()
         if (wakeEngine?.isMonitoringNow == true) {
             wakeEngine?.resume()
             _state.value = VoiceState.WAKE_LISTENING
             _micOwner.value = MicOwner.WAKE
         } else {
             _state.value = VoiceState.READY
+            audioSessionManager?.abandonFocus()
         }
     }
 
@@ -195,6 +216,7 @@ class VoiceRuntime(private val scope: CoroutineScope) {
         wakeEngine?.release()
         sttManager?.release()
         ttsManager?.shutdown()
+        audioSessionManager?.release()
         _state.value = VoiceState.OFF
         _micOwner.value = MicOwner.NONE
     }

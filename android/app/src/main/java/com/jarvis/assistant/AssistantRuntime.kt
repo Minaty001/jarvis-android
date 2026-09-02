@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.jarvis.auth.AuthManager
 import com.jarvis.auth.AuthState
+import com.jarvis.audio.AudioSessionManager
 import com.jarvis.automation.*
 import com.jarvis.backend.ApiClient
 import com.jarvis.backend.ConnectionManager
@@ -11,6 +12,7 @@ import com.jarvis.backend.WebSocketClient
 import com.jarvis.config.Config
 import com.jarvis.stt.NativeSttManager
 import com.jarvis.tts.TtsManager
+import com.jarvis.voice.VoiceRuntime
 import com.jarvis.wakeword.LiveKitWakeWordEngine
 import com.jarvis.wakeword.OnnxWakeWordDetector
 import com.jarvis.wakeword.WakeWordConfig
@@ -70,6 +72,9 @@ class AssistantRuntime(private val context: Context) {
     private var sttManager: NativeSttManager? = null
     private var wakeEngine: LiveKitWakeWordEngine? = null
     private var wsClient: WebSocketClient? = null
+    private var audioSessionManager: AudioSessionManager? = null
+    var voiceRuntime: VoiceRuntime? = null
+        private set
 
     private val initialized = AtomicBoolean(false)
 
@@ -85,7 +90,24 @@ class AssistantRuntime(private val context: Context) {
                     onError = { e -> Log.w(TAG, "STT error: $e") }
                 )
             }
+            audioSessionManager = AudioSessionManager(context)
             initWakeWord()
+
+            val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+            voiceRuntime = VoiceRuntime(scope, audioSessionManager).also {
+                it.initialize(
+                    tts = ttsManager!!,
+                    stt = sttManager!!,
+                    wake = wakeEngine,
+                    onCommand = { text ->
+                        if (authManager.isAuthenticated) {
+                            sendCommand(text)
+                        }
+                    },
+                    onErr = { error -> Log.w(TAG, "Voice error: $error") }
+                )
+            }
+
             _runtimeState.value = RuntimeState.READY
             Log.i(TAG, "Runtime initialized")
         } catch (e: Exception) {
@@ -287,9 +309,11 @@ class AssistantRuntime(private val context: Context) {
     fun isConnected(): Boolean = connectionManager.isConnected
 
     fun destroy() {
+        voiceRuntime?.release()
         wakeEngine?.release()
         sttManager?.release()
         ttsManager?.shutdown()
+        audioSessionManager?.release()
         wsClient?.disconnect()
         confirmationManager.destroy()
         initialized.set(false)
