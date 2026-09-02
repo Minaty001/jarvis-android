@@ -162,7 +162,9 @@ fun JarvisApp(
                     isAutomationEnabled = uiState.isAutomationEnabled,
                     onEnableAutomation = { viewModel.openAccessibilitySettings() },
                     isBackendConnected = uiState.isConnected,
-                    onTestTts = { viewModel.runtime.speakText("JARVIS voice system operational.") }
+                    onTestTts = { viewModel.runtime.speakText("JARVIS voice system operational.") },
+                    onEnrollWithSecret = { secret -> viewModel.enrollWithSecret(secret) },
+                    isEnrolled = uiState.isEnrolled
                 )
             }
         }

@@ -112,8 +112,16 @@ class AssistantRuntime(private val context: Context) {
 
     suspend fun bootstrapAndConnect(): Boolean {
         authManager.initialize()
-        if (authManager.currentState is AuthState.LoggedOut) {
-            authManager.registerDevice()
+        when (authManager.currentState) {
+            is AuthState.LoggedOut, is AuthState.NeedsEnrollment -> {
+                Log.i(TAG, "Auth state: ${authManager.currentState}")
+                return false
+            }
+            is AuthState.Error -> {
+                Log.w(TAG, "Auth error: ${authManager.currentState}")
+                return false
+            }
+            else -> {}
         }
         val authState = waitForAuthState()
         if (authState !is AuthState.Authenticated) {
@@ -128,7 +136,8 @@ class AssistantRuntime(private val context: Context) {
         var attempts = 0
         while (attempts < 30) {
             val state = authManager.currentState
-            if (state is AuthState.Authenticated || state is AuthState.LoggedOut || state is AuthState.Error) {
+            if (state is AuthState.Authenticated || state is AuthState.LoggedOut
+                || state is AuthState.Error || state is AuthState.NeedsEnrollment) {
                 return state
             }
             delay(200)

@@ -22,7 +22,8 @@ data class MainUiState(
     val chatMessages: List<Pair<String, Boolean>> = emptyList(),
     val lastScreenContent: String? = null,
     val confirmationRequest: ConfirmationRequest? = null,
-    val isAutomationEnabled: Boolean = false
+    val isAutomationEnabled: Boolean = false,
+    val isEnrolled: Boolean = false
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -46,7 +47,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     runtimeState = runtimeState,
                     authState = authState,
                     connectionState = connState,
-                    isConnected = connState == ConnectionState.CONNECTED
+                    isConnected = connState == ConnectionState.CONNECTED,
+                    isEnrolled = authState != AuthState.NeedsEnrollment
                 )
             }.collect { newState -> _uiState.value = newState }
         }
@@ -110,6 +112,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmAction(allowed: Boolean) {
         runtime.confirmAction(allowed)
         _uiState.value = _uiState.value.copy(confirmationRequest = null)
+    }
+
+    fun enrollWithSecret(secret: String) {
+        runtime.authManager.enrollWithSecret(secret)
     }
 
     fun openAccessibilitySettings() {

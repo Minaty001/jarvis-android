@@ -50,10 +50,10 @@ export class TokenService {
       .eq("device_id", deviceId);
 
     return {
-      accessToken,
-      refreshToken,
-      expiresIn: accessExpiresIn,
-      deviceId,
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_in: accessExpiresIn,
+      device_id: deviceId,
       trusted: false
     };
   }
@@ -114,10 +114,10 @@ export class TokenService {
     if (updateError) throw updateError;
 
     return {
-      accessToken: newAccess,
-      refreshToken: newRefresh,
-      expiresIn: accessExpiresIn,
-      deviceId: session.device_id,
+      access_token: newAccess,
+      refresh_token: newRefresh,
+      expires_in: accessExpiresIn,
+      device_id: session.device_id,
       trusted: false
     };
   }

@@ -16,6 +16,39 @@ const refreshSchema = z.object({
 export function createAuthRoutes(tokenService, enrollmentService, sessionService) {
   const router = express.Router();
 
+  router.post("/enroll", async (req, res) => {
+    try {
+      const { device_id, device_name, device_model, os_version } = req.body;
+      if (!device_id) {
+        return res.status(400).json({ error: "device_id is required" });
+      }
+      if (!enrollmentService) {
+        return res.status(503).json({ error: "Enrollment service not available (no Supabase)" });
+      }
+
+      const result = await enrollmentService.enrollDevice(
+        device_id,
+        device_name || "unknown",
+        device_model || "unknown",
+        os_version || "unknown"
+      );
+
+      if (!result.success) {
+        return res.status(409).json({ error: result.error });
+      }
+
+      res.json({
+        success: true,
+        device_id,
+        enrollment_secret: result.enrollmentSecret,
+        message: "Enter this pairing code in the JARVIS app Settings > Pair Device"
+      });
+    } catch (error) {
+      console.error("Enrollment error:", error.message);
+      res.status(500).json({ error: "Enrollment failed" });
+    }
+  });
+
   router.post("/token", async (req, res) => {
     try {
       const validation = registerSchema.safeParse(req.body);

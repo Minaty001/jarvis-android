@@ -44,13 +44,16 @@ fun SettingsScreen(
     isAutomationEnabled: Boolean = false,
     onEnableAutomation: () -> Unit = {},
     isBackendConnected: Boolean = false,
-    onTestTts: () -> Unit = {}
+    onTestTts: () -> Unit = {},
+    onEnrollWithSecret: (String) -> Unit = {},
+    isEnrolled: Boolean = false
 ) {
     val context = LocalContext.current
     var wakeWordEnabled by remember { mutableStateOf(true) }
     var sttEnabled by remember { mutableStateOf(true) }
     var ttsEnabled by remember { mutableStateOf(true) }
     var memorySyncEnabled by remember { mutableStateOf(true) }
+    var showPairingDialog by remember { mutableStateOf(false) }
 
     val toggleSettings = listOf(
         ToggleSettingItem(
@@ -100,6 +103,16 @@ fun SettingsScreen(
         InfoSettingItem(Icons.Default.PhoneAndroid, "Device ID", Config.getDeviceId(context)),
         InfoSettingItem(Icons.Default.Info, "App Version", "1.0.0 (Production Build)")
     )
+
+    if (showPairingDialog) {
+        PairingDialog(
+            onConfirm = { secret ->
+                showPairingDialog = false
+                onEnrollWithSecret(secret)
+            },
+            onDismiss = { showPairingDialog = false }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -168,6 +181,53 @@ fun SettingsScreen(
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(text = "WebSocket: ${Config.BACKEND_WS_URL}", color = TextGray, fontSize = 11.sp)
                         Text(text = "API Base: ${Config.BACKEND_API_URL}", color = TextGray, fontSize = 11.sp)
+                    }
+                }
+            }
+
+            // Section 1b: Pairing Card
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, CyanGlow.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .background(DarkCardBg, RoundedCornerShape(14.dp))
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (isEnrolled) Icons.Default.Link else Icons.Default.LinkOff,
+                        contentDescription = null,
+                        tint = if (isEnrolled) CyanGlow else Color.Yellow,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isEnrolled) "Device Paired" else "Device Not Paired",
+                            color = White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = if (isEnrolled) "Connected to backend" else "Enter pairing code from backend to register",
+                            color = TextGray,
+                            fontSize = 12.sp
+                        )
+                    }
+                    Button(
+                        onClick = { showPairingDialog = true },
+                        enabled = !isEnrolled,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CyanGlow,
+                            contentColor = DarkCardBg
+                        )
+                    ) {
+                        Text(
+                            text = if (isEnrolled) "Paired" else "Pair",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }
@@ -305,4 +365,55 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+@Composable
+private fun PairingDialog(
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var pairingCode by remember { mutableStateOf("") }
+    var isError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pair Device") },
+        text = {
+            Column {
+                Text(
+                    "Enter the pairing code from your JARVIS backend to register this device.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = pairingCode,
+                    onValueChange = {
+                        pairingCode = it.trim()
+                        isError = false
+                    },
+                    label = { Text("Pairing Code") },
+                    singleLine = true,
+                    isError = isError,
+                    supportingText = if (isError) {
+                        { Text("Please enter a valid pairing code", color = MaterialTheme.colorScheme.error) }
+                    } else null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (pairingCode.isBlank()) {
+                        isError = true
+                    } else {
+                        onConfirm(pairingCode)
+                    }
+                }
+            ) { Text("Pair") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
 }

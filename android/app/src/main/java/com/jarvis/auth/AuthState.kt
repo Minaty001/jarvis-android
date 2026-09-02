@@ -6,5 +6,6 @@ sealed interface AuthState {
     data object Authenticated : AuthState
     data object Refreshing : AuthState
     data object LoggedOut : AuthState
+    data object NeedsEnrollment : AuthState
     data class Error(val reason: String) : AuthState
 }

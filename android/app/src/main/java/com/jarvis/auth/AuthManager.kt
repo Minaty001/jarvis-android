@@ -18,6 +18,7 @@ class AuthManager(private val context: Context) {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val tokenStore = TokenStore(context)
+    private val pairingStore = PairingStore(context)
     private val apiClient = ApiClient()
 
     private val _state = MutableStateFlow<AuthState>(AuthState.Loading)
@@ -38,7 +39,11 @@ class AuthManager(private val context: Context) {
 
             when {
                 accessToken == null || refreshToken == null || deviceId == null -> {
-                    _state.value = AuthState.LoggedOut
+                    if (pairingStore.isEnrolled()) {
+                        _state.value = AuthState.Error("Tokens missing after enrollment")
+                    } else {
+                        _state.value = AuthState.NeedsEnrollment
+                    }
                 }
                 tokenStore.isAccessTokenExpired() -> {
                     if (tokenStore.isRefreshTokenExpired()) {
@@ -54,12 +59,19 @@ class AuthManager(private val context: Context) {
         }
     }
 
-    fun registerDevice() {
-        if (_state.value != AuthState.LoggedOut) return
+    fun registerDevice(enrollmentSecret: String? = null) {
+        val current = _state.value
+        if (current != AuthState.LoggedOut && current != AuthState.NeedsEnrollment) return
         _state.value = AuthState.Registering
         scope.launch {
-            val deviceId = java.util.UUID.randomUUID().toString()
-            apiClient.registerDevice(deviceId, "Android", android.os.Build.MODEL, android.os.Build.VERSION.RELEASE) { result ->
+            val installationId = pairingStore.installationId
+            apiClient.registerDevice(
+                deviceId = installationId,
+                deviceName = "Android",
+                deviceModel = android.os.Build.MODEL,
+                osVersion = android.os.Build.VERSION.RELEASE,
+                enrollmentSecret = enrollmentSecret
+            ) { result ->
                 if (result != null) {
                     tokenStore.saveTokens(
                         result.accessToken,
@@ -68,6 +80,9 @@ class AuthManager(private val context: Context) {
                         result.expiresIn,
                         result.expiresIn * 30
                     )
+                    if (enrollmentSecret != null) {
+                        pairingStore.savePairingSecret(enrollmentSecret)
+                    }
                     _state.value = AuthState.Authenticated
                     Log.i(TAG, "Device registered successfully")
                 } else {
@@ -76,6 +91,10 @@ class AuthManager(private val context: Context) {
                 }
             }
         }
+    }
+
+    fun enrollWithSecret(enrollmentSecret: String) {
+        registerDevice(enrollmentSecret)
     }
 
     fun refreshAccessToken() {
@@ -117,6 +136,9 @@ class AuthManager(private val context: Context) {
     fun getAccessTokenForRequest(): String? {
         if (isAuthenticated && !tokenStore.isAccessTokenExpired()) {
             return tokenStore.getAccessToken()
+        }
+        if (isAuthenticated && tokenStore.isRefreshTokenExpired().not()) {
+            refreshAccessToken()
         }
         return null
     }
