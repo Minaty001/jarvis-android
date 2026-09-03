@@ -58,6 +58,67 @@ Respond with a JSON plan:
 - Use memory to personalize responses
 - Only use action types from the list above`;
 
+function extractJson(content) {
+  if (!content || typeof content !== 'string') return null;
+
+  const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlockMatch) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim());
+    } catch {
+      // Fall through to balanced parser
+    }
+  }
+
+  const firstBrace = content.indexOf('{');
+  if (firstBrace === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = firstBrace; i < content.length; i++) {
+    const char = content[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (char === '\\') {
+      escape = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (char === '{') {
+        depth++;
+      } else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(content.slice(firstBrace, i + 1));
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  try {
+    const lastBrace = content.lastIndexOf('}');
+    if (lastBrace > firstBrace) {
+      return JSON.parse(content.slice(firstBrace, lastBrace + 1));
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export class CommandRouter {
   constructor(llmOrchestrator, memoryManager) {
     this.llm = llmOrchestrator;
@@ -65,21 +126,40 @@ export class CommandRouter {
   }
 
   async route(command, session, userId, context) {
-    session.addMessage('user', command);
+    if (session?.addMessage) {
+      session.addMessage('user', command);
+    }
 
     if (this.memory && userId) {
       try {
         const skill = await this.memory.matchSkill(userId, command);
         if (skill) {
-          session.addMessage('assistant', `Executing skill: ${skill.name}`);
-          return {
-            intent: `skill:${skill.name}`,
-            requires_automation: true,
-            actions: skill.action_sequence,
-            response: `Running "${skill.name}"...`,
-            skillMatch: true,
-            matchType: skill.matchType,
-          };
+          const rawActions = Array.isArray(skill.action_sequence) ? skill.action_sequence : [];
+          const planResult = ActionPlanSchema.safeParse({ actions: rawActions });
+          if (planResult.success) {
+            let policyRejected = false;
+            for (const action of planResult.data.actions) {
+              const check = ActionPolicy.validateAction(action);
+              if (!check.valid) {
+                console.warn(`Skill '${skill.name}' rejected by action policy: ${check.error}`);
+                policyRejected = true;
+                break;
+              }
+            }
+            if (!policyRejected) {
+              if (session?.addMessage) {
+                session.addMessage('assistant', `Executing skill: ${skill.name}`);
+              }
+              return {
+                intent: `skill:${skill.name}`,
+                requires_automation: true,
+                actions: planResult.data.actions,
+                response: `Running "${skill.name}"...`,
+                skillMatch: true,
+                matchType: skill.matchType,
+              };
+            }
+          }
         }
       } catch (err) {
         console.error('Skill match failed:', err.message);
@@ -90,7 +170,7 @@ export class CommandRouter {
     if (this.memory && userId) {
       try {
         const memories = await this.memory.search(userId, command);
-        if (memories.length > 0) {
+        if (memories && memories.length > 0) {
           memoryContext = '\n\nRelevant memories:\n' +
             memories.map(m => `- ${m.content}`).join('\n');
         }
@@ -99,9 +179,10 @@ export class CommandRouter {
       }
     }
 
+    const sessionMessages = session?.getMessages ? session.getMessages() : [];
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT + memoryContext },
-      ...session.getMessages(),
+      ...sessionMessages,
     ];
 
     const result = await this.llm.generate(messages);
@@ -109,12 +190,10 @@ export class CommandRouter {
     let parsed;
     try {
       const content = result.content;
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
+      const raw = extractJson(content);
+      if (!raw) {
         parsed = { intent: 'direct_response', response: content, actions: [] };
       } else {
-        const raw = JSON.parse(jsonMatch[0]);
-
         const planResult = ActionPlanSchema.safeParse({ actions: raw.actions || [] });
         if (!planResult.success) {
           console.warn('Action plan validation failed:', planResult.error.errors.map(e => e.message).join('; '));
@@ -155,7 +234,9 @@ export class CommandRouter {
       parsed = { intent: 'direct_response', response: result.content, actions: [] };
     }
 
-    session.addMessage('assistant', parsed.response || '');
+    if (session?.addMessage) {
+      session.addMessage('assistant', parsed.response || '');
+    }
 
     if (this.memory && userId) {
       try {

@@ -31,7 +31,10 @@ const tokenService = supabase ? new TokenService(supabase) : null;
 const sessionService = supabase ? new SessionService(supabase) : null;
 const enrollmentService = supabase ? new EnrollmentService(supabase) : null;
 const wsTicketStore = new WsTicketStore();
-const websocketAuth = tokenService ? new WebSocketAuth(tokenService, wsTicketStore) : null;
+
+const commandRouter = new CommandRouter(llm, memoryManager);
+const authMiddleware = createAuthMiddleware(tokenService);
+const websocketAuth = new WebSocketAuth(tokenService, wsTicketStore, commandRouter, sessionManager);
 
 const app = express();
 
@@ -44,9 +47,6 @@ app.use(express.json({ limit: '1mb' }));
 app.use(createRateLimitMiddleware(100, 60000));
 
 app.set('sessionManager', sessionManager);
-
-const commandRouter = new CommandRouter(llm, memoryManager);
-const authMiddleware = tokenService ? createAuthMiddleware(tokenService) : null;
 
 if (tokenService) {
   app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService, sessionService, wsTicketStore));
@@ -68,15 +68,11 @@ app.use((req, res) => {
 
 const server = createServer(app);
 
-if (websocketAuth) {
-  const wss = new WebSocketServer({ server, path: '/ws' });
-  wss.on('connection', (ws, req) => websocketAuth.handleConnection(ws, req));
-}
+const wss = new WebSocketServer({ server, path: '/ws' });
+wss.on('connection', (ws, req) => websocketAuth.handleConnection(ws, req));
 
 setInterval(() => {
-  if (websocketAuth) {
-    websocketAuth.cleanupStaleConnections();
-  }
+  websocketAuth.cleanupStaleConnections();
 }, 60000);
 
 if (sessionService) {

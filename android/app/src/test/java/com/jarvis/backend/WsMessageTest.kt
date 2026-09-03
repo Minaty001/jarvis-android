@@ -68,4 +68,17 @@ class WsMessageTest {
         assertEquals("go_back", resp.actions[0].type)
         assertTrue(resp.actions[0].params.isEmpty())
     }
+
+    @Test
+    fun `parse response with nested data`() {
+        val json = """{"type":"command_response","data":{"intent":"wifi","response":"Turning on Wi-Fi","actions":[{"type":"wifi","params":{"action":"on"}}]}}"""
+        val msg = WsMessage.parse(json)
+        assertTrue(msg is WsMessage.CommandResponse)
+        val resp = msg as WsMessage.CommandResponse
+        assertEquals("wifi", resp.intent)
+        assertEquals("Turning on Wi-Fi", resp.response)
+        assertEquals(1, resp.actions.size)
+        assertEquals("wifi", resp.actions[0].type)
+        assertEquals("on", resp.actions[0].params["action"])
+    }
 }

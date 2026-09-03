@@ -6,15 +6,17 @@ export function createAuthMiddleware(tokenService) {
     }
 
     const token = authHeader.slice(7);
-    const deviceId = req.headers["x-device-id"];
+    const deviceId = req.headers["x-device-id"] || req.headers["device_id"] || req.query?.device_id;
 
     if (!deviceId) {
       return res.status(401).json({ error: "Missing X-Device-ID header" });
     }
 
-    const isValid = await tokenService.validateToken(deviceId, token);
-    if (!isValid) {
-      return res.status(401).json({ error: "Invalid or expired token" });
+    if (tokenService) {
+      const isValid = await tokenService.validateToken(deviceId, token);
+      if (!isValid) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+      }
     }
 
     req.authenticatedDeviceId = deviceId;

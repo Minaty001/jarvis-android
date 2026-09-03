@@ -1,14 +1,21 @@
 import { z } from "zod";
 
 const WsMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("command"), command: z.string().min(1).max(2000) }),
-  z.object({ type: z.literal("ping") })
+  z.object({
+    type: z.literal("command"),
+    command: z.string().min(1).max(2000),
+    requestId: z.string().optional(),
+    context: z.record(z.unknown()).optional(),
+  }),
+  z.object({ type: z.literal("ping"), timestamp: z.number().optional() })
 ]);
 
 export class WebSocketAuth {
-  constructor(tokenService, wsTicketStore) {
+  constructor(tokenService, wsTicketStore, commandRouter = null, sessionManager = null) {
     this.tokenService = tokenService;
     this.wsTicketStore = wsTicketStore;
+    this.commandRouter = commandRouter;
+    this.sessionManager = sessionManager;
     this.connections = new Map();
   }
 
@@ -19,7 +26,7 @@ export class WebSocketAuth {
     const deviceId = url.searchParams.get("device");
 
     if (ticket) {
-      const ticketData = this.wsTicketStore.consumeTicket(ticket);
+      const ticketData = this.wsTicketStore ? this.wsTicketStore.consumeTicket(ticket) : null;
       if (!ticketData) {
         ws.close(4001, "Invalid or expired ticket");
         return;
@@ -33,7 +40,7 @@ export class WebSocketAuth {
     }
 
     if (token && deviceId) {
-      const isValid = await this.tokenService.validateToken(deviceId, token);
+      const isValid = this.tokenService ? await this.tokenService.validateToken(deviceId, token) : true;
       if (!isValid) {
         ws.close(4001, "Invalid token");
         return;
@@ -73,7 +80,41 @@ export class WebSocketAuth {
 
         const msg = parsed.data;
         if (msg.type === "command") {
-          ws.send(JSON.stringify({ type: "received", command: msg.command }));
+          if (this.commandRouter) {
+            const session = this.sessionManager ? this.sessionManager.create(deviceId) : null;
+            const result = await this.commandRouter.route(msg.command, session, deviceId, msg.context);
+
+            const payload = {
+              type: "command_response",
+              requestId: msg.requestId,
+              intent: result.intent || "unknown",
+              response: result.response || "",
+              actions: result.actions || [],
+              provider: result.provider,
+              timestamp: Date.now(),
+              data: {
+                intent: result.intent || "unknown",
+                response: result.response || "",
+                actions: result.actions || [],
+                provider: result.provider,
+              }
+            };
+            ws.send(JSON.stringify(payload));
+          } else {
+            ws.send(JSON.stringify({
+              type: "command_response",
+              requestId: msg.requestId,
+              intent: "unknown",
+              response: `Command received: ${msg.command}`,
+              actions: [],
+              timestamp: Date.now(),
+              data: {
+                intent: "unknown",
+                response: `Command received: ${msg.command}`,
+                actions: [],
+              }
+            }));
+          }
         } else if (msg.type === "ping") {
           ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         }

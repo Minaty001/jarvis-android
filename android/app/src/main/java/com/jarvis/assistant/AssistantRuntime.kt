@@ -175,6 +175,7 @@ class AssistantRuntime(private val context: Context) {
             Log.w(TAG, "Cannot connect WS: no token or deviceId")
             return
         }
+        apiClient.authToken = token
 
         wsClient?.disconnect()
         wsClient = WebSocketClient(
@@ -225,14 +226,18 @@ class AssistantRuntime(private val context: Context) {
             val json = JSONObject(msg)
             val type = json.optString("type", "")
             when (type) {
-                "response" -> {
+                "command_response", "response" -> {
                     val data = json.optJSONObject("data")
-                    val actions = data?.optJSONArray("actions")
+                    val actions = data?.optJSONArray("actions") ?: json.optJSONArray("actions")
                     if (actions != null && actions.length() > 0) {
                         executeAutomationPlan(actions)
                     }
-                    val response = data?.optString("response")
-                    if (!response.isNullOrBlank()) {
+                    val response = if (data != null && data.has("response")) {
+                        data.optString("response", "")
+                    } else {
+                        json.optString("response", "")
+                    }
+                    if (response.isNotBlank()) {
                         speakText(response)
                     }
                 }
@@ -245,7 +250,31 @@ class AssistantRuntime(private val context: Context) {
     }
 
     fun sendCommand(command: String) {
-        wsClient?.sendCommand(command)
+        if (wsClient?.isConnected() == true) {
+            wsClient?.sendCommand(command)
+        } else {
+            val token = authManager.getAccessTokenForRequest()
+            val deviceId = authManager.deviceId ?: "android-device"
+            apiClient.sendCommand(command, token, deviceId) { result ->
+                if (result != null) {
+                    if (result.actions.isNotEmpty()) {
+                        val actionsArr = org.json.JSONArray()
+                        result.actions.forEach { act ->
+                            val obj = JSONObject()
+                            obj.put("type", act.type)
+                            val pObj = JSONObject()
+                            act.params.forEach { (k, v) -> pObj.put(k, v) }
+                            obj.put("params", pObj)
+                            actionsArr.put(obj)
+                        }
+                        executeAutomationPlan(actionsArr)
+                    }
+                    if (result.response.isNotBlank()) {
+                        speakText(result.response)
+                    }
+                }
+            }
+        }
     }
 
     fun executeAutomationPlan(actions: org.json.JSONArray) {

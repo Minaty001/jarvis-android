@@ -51,6 +51,7 @@ data class MemoryStats(
 class ApiClient(
     var baseUrl: String = Config.BACKEND_API_URL
 ) {
+    var authToken: String? = null
     companion object {
         private const val TAG = "ApiClient"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
@@ -470,6 +471,78 @@ class ApiClient(
             } catch (e: Exception) {
                 Log.w(TAG, "searchMemory failed: ${e.message}")
                 emptyList()
+            }
+        }
+    }
+
+    fun sendCommand(
+        command: String,
+        token: String? = authToken,
+        deviceId: String = "android-device",
+        context: Map<String, Any> = emptyMap(),
+        onResult: (WsMessage.CommandResponse?) -> Unit
+    ) {
+        scope.launch {
+            try {
+                val cleanUrl = baseUrl.trim().trimEnd('/')
+                val bodyJson = JSONObject().apply {
+                    put("command", command)
+                    val ctxObj = JSONObject()
+                    context.forEach { (k, v) -> ctxObj.put(k, v) }
+                    put("context", ctxObj)
+                }.toString()
+
+                val builder = Request.Builder()
+                    .url("$cleanUrl/api/v1/command")
+                    .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+                    .header("Accept", "application/json")
+                    .header("X-Device-ID", deviceId)
+
+                val effectiveToken = token ?: authToken
+                if (!effectiveToken.isNullOrBlank()) {
+                    builder.header("Authorization", "Bearer $effectiveToken")
+                }
+
+                sharedClient.newCall(builder.build()).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string().orEmpty()
+                        val parsed = WsMessage.parse(body)
+                        if (parsed is WsMessage.CommandResponse) {
+                            launch(Dispatchers.Main) { onResult(parsed) }
+                        } else {
+                            val json = JSONObject(body)
+                            val resObj = json.optJSONObject("result") ?: json
+                            val actionsArr = resObj.optJSONArray("actions")
+                            val actions = mutableListOf<WsMessage.WsAction>()
+                            if (actionsArr != null) {
+                                for (i in 0 until actionsArr.length()) {
+                                    val item = actionsArr.getJSONObject(i)
+                                    val params = mutableMapOf<String, String>()
+                                    val pJson = item.optJSONObject("params")
+                                    if (pJson != null) {
+                                        for (k in pJson.keys()) {
+                                            params[k] = pJson.optString(k, "")
+                                        }
+                                    }
+                                    actions.add(WsMessage.WsAction(item.optString("type", ""), params))
+                                }
+                            }
+                            val cmdResp = WsMessage.CommandResponse(
+                                intent = resObj.optString("intent", "unknown"),
+                                response = resObj.optString("response", ""),
+                                actions = actions,
+                                provider = resObj.optString("provider", null)
+                            )
+                            launch(Dispatchers.Main) { onResult(cmdResp) }
+                        }
+                    } else {
+                        Log.w(TAG, "sendCommand failed HTTP ${response.code}")
+                        launch(Dispatchers.Main) { onResult(null) }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "sendCommand failed: ${e.message}")
+                launch(Dispatchers.Main) { onResult(null) }
             }
         }
     }

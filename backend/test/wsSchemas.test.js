@@ -1,4 +1,7 @@
+import { jest } from '@jest/globals';
 import { validateClientMessage, validateServerMessage, createCommandResponse, createErrorResponse, createPong, createAuthRequired } from '../src/actions/wsSchemas.js';
+import { WebSocketAuth } from '../src/auth/websocketAuth.js';
+import { WsTicketStore } from '../src/auth/wsTicketStore.js';
 
 describe('ClientMessage validation', () => {
   test('valid command message', () => {
@@ -87,5 +90,79 @@ describe('Message builders', () => {
   test('createAuthRequired has default message', () => {
     const msg = createAuthRequired();
     expect(msg.message).toBe('Authentication required');
+  });
+});
+
+describe('WebSocketAuth Execution Pipeline', () => {
+  test('executes command through commandRouter and emits command_response with action plan', async () => {
+    const wsTicketStore = new WsTicketStore();
+    const { ticket } = wsTicketStore.createTicket('test-device-123');
+
+    const mockCommandRouter = {
+      route: jest.fn().mockResolvedValue({
+        intent: 'open_app',
+        response: 'Opening YouTube',
+        actions: [{ type: 'open_app', params: { package: 'com.google.android.youtube' } }],
+        provider: 'groq',
+      }),
+    };
+
+    const mockSessionManager = {
+      create: jest.fn().mockReturnValue({
+        addMessage: jest.fn(),
+        getMessages: jest.fn().mockReturnValue([]),
+      }),
+    };
+
+    const wsAuth = new WebSocketAuth(null, wsTicketStore, mockCommandRouter, mockSessionManager);
+
+    const sentMessages = [];
+    const messageHandlers = [];
+
+    const mockWs = {
+      send: jest.fn((data) => sentMessages.push(JSON.parse(data))),
+      close: jest.fn(),
+      on: jest.fn((event, cb) => {
+        if (event === 'message') {
+          messageHandlers.push(cb);
+        }
+      }),
+    };
+
+    const req = {
+      url: `/ws?ticket=${ticket}`,
+      headers: { host: 'localhost' },
+    };
+
+    await wsAuth.handleConnection(mockWs, req);
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].type).toBe('connected');
+
+    const commandMsg = Buffer.from(JSON.stringify({
+      type: 'command',
+      command: 'open youtube',
+      requestId: 'req-001',
+    }));
+
+    for (const handler of messageHandlers) {
+      await handler(commandMsg);
+    }
+
+    expect(mockCommandRouter.route).toHaveBeenCalledWith(
+      'open youtube',
+      expect.anything(),
+      'test-device-123',
+      undefined
+    );
+
+    expect(sentMessages).toHaveLength(2);
+    const resp = sentMessages[1];
+    expect(resp.type).toBe('command_response');
+    expect(resp.intent).toBe('open_app');
+    expect(resp.response).toBe('Opening YouTube');
+    expect(resp.actions).toHaveLength(1);
+    expect(resp.data).toBeDefined();
+    expect(resp.data.actions).toHaveLength(1);
   });
 });

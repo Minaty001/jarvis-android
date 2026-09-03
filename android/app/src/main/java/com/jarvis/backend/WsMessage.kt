@@ -28,7 +28,8 @@ sealed interface WsMessage {
                 val type = obj.optString("type", "")
                 when (type) {
                     "command_response", "response" -> {
-                        val actionsArr = obj.optJSONArray("actions")
+                        val dataObj = obj.optJSONObject("data")
+                        val actionsArr = obj.optJSONArray("actions") ?: dataObj?.optJSONArray("actions")
                         val actions = mutableListOf<WsAction>()
                         if (actionsArr != null) {
                             for (i in 0 until actionsArr.length()) {
@@ -46,11 +47,21 @@ sealed interface WsMessage {
                                 ))
                             }
                         }
+                        val respText = if (obj.has("response")) {
+                            obj.optString("response", "")
+                        } else {
+                            dataObj?.optString("response", "") ?: ""
+                        }
+                        val intentText = if (obj.has("intent")) {
+                            obj.optString("intent", "unknown")
+                        } else {
+                            dataObj?.optString("intent", "unknown") ?: "unknown"
+                        }
                         CommandResponse(
-                            intent = obj.optString("intent", "unknown"),
-                            response = obj.optString("response", ""),
+                            intent = intentText,
+                            response = respText,
                             actions = actions,
-                            provider = obj.optString("provider", null)
+                            provider = obj.optString("provider", dataObj?.optString("provider", null))
                         )
                     }
                     "error" -> Error(obj.optString("message", "Unknown error"))
