@@ -14,8 +14,9 @@ const StoreSchema = z.object({
 
 export function memoryRoutes(memoryManager, authMiddleware) {
   const router = Router();
+  const auth = typeof authMiddleware === 'function' ? authMiddleware : (req, res, next) => next();
 
-  router.get('/memory/search', authMiddleware, async (req, res) => {
+  router.get('/memory/search', auth, async (req, res) => {
     try {
       const { query, limit } = SearchSchema.parse(req.query);
       const userId = req.authenticatedDeviceId;
@@ -29,7 +30,7 @@ export function memoryRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.get('/memory/recent', authMiddleware, async (req, res) => {
+  router.get('/memory/recent', auth, async (req, res) => {
     try {
       const userId = req.authenticatedDeviceId;
       const limit = parseInt(req.query.limit || '10', 10);
@@ -40,7 +41,7 @@ export function memoryRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.post('/memory/store', authMiddleware, async (req, res) => {
+  router.post('/memory/store', auth, async (req, res) => {
     try {
       const { content, memoryType, importance } = StoreSchema.parse(req.body);
       const userId = req.authenticatedDeviceId;
@@ -54,7 +55,7 @@ export function memoryRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.delete('/memory/:id', authMiddleware, async (req, res) => {
+  router.delete('/memory/:id', auth, async (req, res) => {
     try {
       const { id } = req.params;
       const userId = req.authenticatedDeviceId;
@@ -71,7 +72,7 @@ export function memoryRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.get('/memory/stats', authMiddleware, async (req, res) => {
+  router.get('/memory/stats', auth, async (req, res) => {
     try {
       const userId = req.authenticatedDeviceId;
       const stats = await memoryManager.getStats(userId);

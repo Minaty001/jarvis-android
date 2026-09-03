@@ -43,17 +43,19 @@ app.use(cors({
 app.use(express.json({ limit: '1mb' }));
 app.use(createRateLimitMiddleware(100, 60000));
 
+app.set('sessionManager', sessionManager);
+
 const commandRouter = new CommandRouter(llm, memoryManager);
+const authMiddleware = tokenService ? createAuthMiddleware(tokenService) : null;
 
 if (tokenService) {
   app.use('/api/v1/auth', createAuthRoutes(tokenService, enrollmentService, sessionService, wsTicketStore));
-  app.use(createAuthMiddleware(tokenService));
 }
 
 app.use(healthRoutes(llm, sessionManager, memoryManager));
-app.use(commandRoutes(commandRouter));
-app.use(memoryRoutes(memoryManager));
-app.use(skillRoutes(memoryManager));
+app.use(commandRoutes(commandRouter, authMiddleware));
+app.use(memoryRoutes(memoryManager, authMiddleware));
+app.use(skillRoutes(memoryManager, authMiddleware));
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);

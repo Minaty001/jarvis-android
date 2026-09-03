@@ -12,8 +12,9 @@ const SkillSchema = z.object({
 
 export function skillRoutes(memoryManager, authMiddleware) {
   const router = Router();
+  const auth = typeof authMiddleware === 'function' ? authMiddleware : (req, res, next) => next();
 
-  router.post('/skill/learn', authMiddleware, async (req, res) => {
+  router.post('/skill/learn', auth, async (req, res) => {
     try {
       const { command, actions, name } = SkillSchema.parse(req.body);
       const userId = req.authenticatedDeviceId;
@@ -34,7 +35,7 @@ export function skillRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.get('/skill/match', authMiddleware, async (req, res) => {
+  router.get('/skill/match', auth, async (req, res) => {
     try {
       const { command } = req.query;
       const userId = req.authenticatedDeviceId;
@@ -48,7 +49,7 @@ export function skillRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.get('/skill/list', authMiddleware, async (req, res) => {
+  router.get('/skill/list', auth, async (req, res) => {
     try {
       const userId = req.authenticatedDeviceId;
       const skills = await memoryManager.listSkills(userId);
@@ -58,7 +59,7 @@ export function skillRoutes(memoryManager, authMiddleware) {
     }
   });
 
-  router.delete('/skill/:id', authMiddleware, async (req, res) => {
+  router.delete('/skill/:id', auth, async (req, res) => {
     try {
       const { id } = req.params;
       const userId = req.authenticatedDeviceId;

@@ -8,12 +8,14 @@ const CommandSchema = z.object({
 
 export function commandRoutes(commandRouter, authMiddleware) {
   const router = Router();
+  const auth = typeof authMiddleware === 'function' ? authMiddleware : (req, res, next) => next();
 
-  router.post('/command', authMiddleware, async (req, res) => {
+  router.post('/command', auth, async (req, res) => {
     try {
       const { command, context } = CommandSchema.parse(req.body);
       const deviceId = req.authenticatedDeviceId;
-      const session = req.app.get('sessionManager').create(deviceId);
+      const sessionManager = req.app.get('sessionManager');
+      const session = sessionManager ? sessionManager.create(deviceId) : null;
       const result = await commandRouter.route(command, session, deviceId, context);
       res.json({ status: 'success', result });
     } catch (err) {
